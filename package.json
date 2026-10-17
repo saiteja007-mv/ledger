@@ -1,0 +1,16 @@
+{
+  "name": "ledger",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted personal finance tracker: web app + MCP server over one SQLite file",
+  "type": "commonjs",
+  "scripts": {
+    "server": "node server/index.cjs",
+    "test": "node --test",
+    "import:xlsx": "node scripts/import-xlsx.cjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  }
+}

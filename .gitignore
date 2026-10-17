@@ -1,0 +1,13 @@
+node_modules/
+.data/
+*.log
+docs/private/
+*.pre-*
+*.phase1-*
+
+# iOS build output
+ios/.build/
+ios/.swiftpm/
+ios/xtool/
+ios/build.log
+ios/logic.log

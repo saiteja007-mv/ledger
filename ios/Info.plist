@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>Ledger</string>
+
+    <!-- Your server, written by scripts/ios-config.cjs (the widgets read their own copy). Empty: the app asks at launch. -->
+    <key>LedgerServerURL</key>
+    <string></string>
+    <!-- Optional: the MCP endpoint you publish for assistants (docs/extras.md), shown under More → MCP server. -->
+    <key>LedgerMCPURL</key>
+    <string></string>
+
+    <!-- The home-screen icon. xtool only sets the legacy CFBundleIconFile, which iOS 27 ignores; this points at
+         AppIcon60x60@2x/@3x.png, which xtool.yml's `resources` packs into the app root (no asset catalog needed). -->
+    <key>CFBundleIcons</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>AppIcon60x60</string>
+            </array>
+        </dict>
+    </dict>
+
+    <!-- ledger://add or ledger://<tab> deep links, used by the widgets, Siri and Shortcuts (RootView.open). -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>ledger</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>ledger</string>
+            </array>
+        </dict>
+    </array>
+
+    <!-- Face ID on launch and on every return from the background (AppLock). -->
+    <key>NSFaceIDUsageDescription</key>
+    <string>Face ID keeps your finances private.</string>
+
+    <!-- Receipt photos (CameraPicker). The photo library uses PhotosPicker, which needs no permission. -->
+    <key>NSCameraUsageDescription</key>
+    <string>Take a photo of a receipt to store it with your spending.</string>
+
+    <key>UILaunchScreen</key>
+    <dict/>
+</dict>
+</plist>

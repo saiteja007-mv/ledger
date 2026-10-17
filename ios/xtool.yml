@@ -1,0 +1,16 @@
+version: 1
+# Never rename bundleID or product: each change burns one of the 10 free App IDs per week.
+# One extension, LedgerWidgets: it costs one more App ID. Never rename it either.
+bundleID: com.example.ledger   # scripts/ios-config.cjs sets yours
+product: Ledger
+infoPath: Info.plist
+iconPath: Resources/AppIcon.png
+# The icon iOS actually shows (Info.plist CFBundleIcons): 120 and 180 px copies in the app root.
+# Redraw all three from the 1024 px AppIcon.png if it changes.
+resources:
+  - Resources/AppIcon60x60@2x.png
+  - Resources/AppIcon60x60@3x.png
+extensions:
+  # bundle id defaults to <bundleID>.LedgerWidgets; never rename (burns an App ID)
+  - product: LedgerWidgets
+    infoPath: Support/LedgerWidgets-Info.plist
