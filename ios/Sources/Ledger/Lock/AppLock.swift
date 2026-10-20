@@ -1,5 +1,6 @@
 import LocalAuthentication
 import Observation
+import Security
 import SwiftUI
 
 /// Face ID (or the passcode) on launch and on every return from the background.
@@ -26,13 +27,15 @@ final class AppLock {
         }
     }
 
-    func unlock() async {
+    /// `passcodeOnly` skips Face ID and asks for the iPhone passcode straight away.
+    func unlock(passcodeOnly: Bool = false) async {
         guard !isPrompting else { return }
         isPrompting = true
         defer { isPrompting = false }
 
         let context = LAContext()
         context.localizedCancelTitle = String(localized: "Not Now")
+        let reason = String(localized: "Unlock Ledger")
         var error: NSError?
         // Falls back to the passcode when Face ID isn't set up or fails repeatedly.
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
@@ -40,7 +43,14 @@ final class AppLock {
             return
         }
         do {
-            isUnlocked = try await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: String(localized: "Unlock Ledger"))
+            // No LAPolicy is passcode-only; an access control that needs only the passcode is.
+            if passcodeOnly, let passcode = SecAccessControlCreateWithFlags(
+                nil, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, .devicePasscode, nil
+            ) {
+                isUnlocked = try await context.evaluateAccessControl(passcode, operation: .useItem, localizedReason: reason)
+            } else {
+                isUnlocked = try await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)
+            }
             lastError = nil
         } catch {
             lastError = (error as? LAError)?.code == .userCancel ? nil : error.localizedDescription
