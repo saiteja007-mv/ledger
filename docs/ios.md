@@ -57,7 +57,7 @@ bash scripts/ios-build.sh      # build + logic checks
 bash scripts/ios-install.sh    # build, sign with your Apple ID, install over USB
 ```
 
-The first launch asks for Face ID, then shows your accounts. If it says the Ledger API is unreachable, turn
+The first launch asks for Face ID (or tap Use Passcode for the iPhone passcode), then shows your accounts. If it says the Ledger API is unreachable, turn
 Tailscale on on the phone.
 
 Every 7 days (free Apple ID) the app stops opening; plug the phone in and run `scripts/ios-install.sh` again.

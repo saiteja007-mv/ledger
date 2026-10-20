@@ -41,7 +41,7 @@ struct MoreView: View {
                             .padding(.top, 18)
                             .padding(.bottom, 8)
                         KitMenuRow(
-                            icon: .faceId, title: "Face ID",
+                            icon: .faceId, title: "Face ID & Passcode",
                             subtitle: String(localized: "Ledger locks on launch and when you leave it"), showsChevron: false
                         )
                         link(.server, icon: .security, title: "Server",

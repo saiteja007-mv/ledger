@@ -17,7 +17,7 @@ struct LockView: View {
 
             VStack(spacing: 8) {
                 Text(lock.isUnlocked ? "Ledger" : "Ledger is locked").font(.kitHeading)
-                Text("Use Face ID to open your finances.")
+                Text("Use Face ID or your passcode to open your finances.")
                     .font(.kitSmall)
                     .foregroundStyle(KitColor.secondary.color)
                 if let error = lock.lastError, !lock.isUnlocked {
@@ -32,10 +32,17 @@ struct LockView: View {
 
             Spacer()
             if !lock.isUnlocked {
-                Button("Unlock with Face ID", action: unlock)
-                    .buttonStyle(KitPrimaryButtonStyle())
-                    .padding(.horizontal, KitMetrics.margin)
-                    .padding(.bottom, 24)
+                VStack(spacing: 8) {
+                    Button("Unlock with Face ID") { unlock() }
+                        .buttonStyle(KitPrimaryButtonStyle())
+                    Button("Use Passcode") { unlock(passcodeOnly: true) }
+                        .buttonStyle(.plain)
+                        .font(.kitBodyMedium)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .padding(.horizontal, KitMetrics.margin)
+                .padding(.bottom, 24)
             }
         }
         .foregroundStyle(KitColor.label.color)
@@ -43,7 +50,7 @@ struct LockView: View {
         .background(KitColor.background.color.ignoresSafeArea())
     }
 
-    private func unlock() {
-        Task { await lock.unlock() }
+    private func unlock(passcodeOnly: Bool = false) {
+        Task { await lock.unlock(passcodeOnly: passcodeOnly) }
     }
 }
