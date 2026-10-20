@@ -4,7 +4,7 @@ const { parseBofaAlert } = require('../server/alerts.cjs')
 const T = '2026-10-01'
 
 test('card-not-present charge (email wording)', () => {
-  const r = parseBofaAlert('Credit card not present during this transaction Cash Rewards Visa ending in 1234 Amount: $12.34 Date: October 1, 2026 Where: Example Shop This may have occurred for a', T)
+  const r = parseBofaAlert('Credit card not present during this transaction Example Visa ending in 1234 Amount: $12.34 Date: October 1, 2026 Where: Example Shop This may have occurred for a', T)
   assert.deepEqual(r, { ok: true, last4: '1234', amount_cents: 1234, direction: 'expense', merchant: 'Example Shop', date: '2026-10-01' })
 })
 
@@ -14,7 +14,7 @@ test('outside-US charge keeps merchant, drops location', () => {
 })
 
 test('credit is a refund (income)', () => {
-  const r = parseBofaAlert("We&#39;ve credited your account Cash Rewards Visa ending in 1234 Amount: $9.44 Date of credit: September 30, 2026 Merchant: APPLE.COM/BILL 866-712-7753 CA View account activity", T)
+  const r = parseBofaAlert("We&#39;ve credited your account Example Visa ending in 1234 Amount: $9.44 Date of credit: September 30, 2026 Merchant: APPLE.COM/BILL 866-712-7753 CA View account activity", T)
   assert.equal(r.direction, 'income'); assert.equal(r.amount_cents, 944); assert.equal(r.merchant, 'APPLE.COM/BILL 866-712-7753 CA'); assert.equal(r.last4, '1234')
 })
 
