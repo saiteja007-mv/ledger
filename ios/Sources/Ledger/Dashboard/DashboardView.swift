@@ -7,8 +7,8 @@ struct DashboardView: View {
     @Environment(Navigator.self) private var navigator
     @State private var recent: Loadable<[LedgerTransaction]> = .loading
     @State private var range = HomeRange.monthly
-    /// An account name, or nil for all of them.
-    @State private var accountName: String?
+    /// A net worth group's key (banking, cards, cash, people), or nil for all of them.
+    @State private var groupKey: String?
 
     var body: some View {
         NavigationStack {
@@ -60,30 +60,35 @@ struct DashboardView: View {
 
     // MARK: Hero card
 
-    /// The card's pages: everything together first, then one per account.
-    private var pages: [String?] {
-        [nil] + store.accounts.map { Optional($0.name) }
+    /// The card's pages: everything together first, then one per group that has accounts. Groups, not
+    /// accounts, so the swipe stays five pages long however many accounts there are.
+    private func pages(_ netWorth: NetWorth) -> [String?] {
+        [nil] + netWorth.groups.filter { !$0.accounts.isEmpty }.map { Optional($0.key) }
     }
 
-    /// Swipe left and right on the balance to move between all accounts and each account; the list under
-    /// the card follows the page.
+    /// The group the card is on, or nil for net worth.
+    private var group: NetWorthGroup? {
+        groupKey.flatMap { key in store.netWorth.value?.groups.first { $0.key == key } }
+    }
+
+    /// Swipe left and right on the balance, or tap a group's name, to move between all accounts and each
+    /// group; the accounts row and the list under the card follow the page.
     private func heroCard(_ netWorth: NetWorth) -> some View {
         ZStack(alignment: .topLeading) {
             KitColor.hero.color
             KitSwirl(cut: .card, fill: KitColor.yellow, outline: KitColor.black)
             VStack(spacing: 0) {
-                TabView(selection: $accountName) {
-                    ForEach(pages, id: \.self) { name in
-                        balancePage(name, netWorth: netWorth).tag(name)
+                TabView(selection: $groupKey) {
+                    ForEach(pages(netWorth), id: \.self) { key in
+                        balancePage(netWorth.groups.first { $0.key == key }, netWorth: netWorth).tag(key)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
-                .frame(height: 158)
+                .frame(height: 144)
                 .accessibilityElement(children: .contain)
-                .accessibilityAdjustableAction(stepAccount)
+                .accessibilityAdjustableAction { step($0, pages: pages(netWorth)) }
 
-                pageDots
-                    .padding(.top, 2)
+                groupTabs(netWorth)
 
                 Spacer(minLength: 8)
                 accountsRow
@@ -93,20 +98,25 @@ struct DashboardView: View {
         }
         .frame(height: 340)
         .clipShape(RoundedRectangle(cornerRadius: KitMetrics.cardRadius, style: .continuous))
-        .animation(.snappy, value: accountName)
+        .animation(.snappy, value: groupKey)
     }
 
-    private func balancePage(_ name: String?, netWorth: NetWorth) -> some View {
-        let account = name.flatMap { name in store.accounts.first { $0.name == name } }
-        return VStack(spacing: 6) {
-            Text(account?.isLiability == true ? "Owed now" : name == nil ? "Net worth" : "Available balance")
+    private func balancePage(_ group: NetWorthGroup?, netWorth: NetWorth) -> some View {
+        VStack(spacing: 6) {
+            Text(group?.label ?? String(localized: "Net worth"))
                 .font(.kitBodyMedium)
-            KitAmountView(cents: account?.currentCents ?? netWorth.netCents, currency: account?.currency, size: .hero)
+            KitAmountView(cents: group?.totalCents ?? netWorth.netCents, currency: nil, size: .hero)
                 .environment(\.colorScheme, .light)
                 .minimumScaleFactor(0.6)
-            Text(account?.name ?? String(localized: "All accounts"))
-                .font(.kitBody)
-                .lineLimit(1)
+            Group {
+                if let group {
+                    Text("^[\(group.accounts.count) account](inflect: true)")
+                } else {
+                    Text("All accounts")
+                }
+            }
+            .font(.kitBody)
+            .lineLimit(1)
         }
         .foregroundStyle(KitColor.black)
         .padding(.horizontal, 24)
@@ -114,68 +124,84 @@ struct DashboardView: View {
         .contentShape(.rect)
     }
 
-    /// Where the card is among its pages.
-    private var pageDots: some View {
-        let current = pages.firstIndex(of: accountName) ?? 0
-        return HStack(spacing: 6) {
-            ForEach(pages.indices, id: \.self) { index in
-                Capsule()
-                    .fill(KitColor.black.opacity(index == current ? 0.85 : 0.2))
-                    .frame(width: index == current ? 16 : 6, height: 6)
+    /// The pages' names, in place of dots: the current one is filled, and a tap jumps to any of them.
+    private func groupTabs(_ netWorth: NetWorth) -> some View {
+        let tabs = HStack(spacing: 4) {
+            ForEach(pages(netWorth), id: \.self) { key in
+                let selected = key == groupKey
+                Button { groupKey = key } label: {
+                    Text(netWorth.groups.first { $0.key == key }?.label ?? String(localized: "All"))
+                        .font(.kitSmallMedium)
+                        .foregroundStyle(selected ? KitColor.yellow : KitColor.black)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(selected ? KitColor.black : .clear, in: .capsule)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
+        // Scrolls only when the names don't fit, at large text sizes.
+        return ViewThatFits(in: .horizontal) {
+            tabs
+            ScrollView(.horizontal, showsIndicators: false) { tabs.padding(.horizontal, 20) }
+        }
         .frame(maxWidth: .infinity)
-        .accessibilityHidden(true)
     }
 
-    private func stepAccount(_ direction: AccessibilityAdjustmentDirection) {
-        guard let index = pages.firstIndex(of: accountName) else { return }
+    private func step(_ direction: AccessibilityAdjustmentDirection, pages: [String?]) {
+        guard let index = pages.firstIndex(of: groupKey) else { return }
         switch direction {
-        case .increment where index + 1 < pages.count: accountName = pages[index + 1]
-        case .decrement where index > 0: accountName = pages[index - 1]
+        case .increment where index + 1 < pages.count: groupKey = pages[index + 1]
+        case .decrement where index > 0: groupKey = pages[index - 1]
         default: break
         }
     }
 
-    /// The kit's "Send money" row: a black action circle, then a circle per account.
+    /// The kit's "Send money" row: a black action circle, then a circle per account on the card's page,
+    /// each with its balance (cards show what you owe).
     private var accountsRow: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Accounts").font(.kitSubtitle).foregroundStyle(KitColor.black).padding(.horizontal, 20)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 14) {
-                    Button { navigator.isAdding = true } label: {
-                        VStack(spacing: 4) {
-                            ZStack {
-                                Circle().fill(KitColor.black)
-                                KitIconView(icon: .plus, height: 24, color: KitColor.white)
-                            }
-                            .frame(width: 56, height: 56)
-                            Text("Log").font(.kitSmallMedium).foregroundStyle(KitColor.black)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 14) {
+                Button { navigator.isAdding = true } label: {
+                    VStack(spacing: 4) {
+                        ZStack {
+                            Circle().fill(KitColor.black)
+                            KitIconView(icon: .plus, height: 24, color: KitColor.white)
                         }
-                    }
-                    .accessibilityLabel("Log Spending")
-                    ForEach(store.accounts) { account in
-                        NavigationLink(value: Route.account(account)) {
-                            VStack(spacing: 4) {
-                                ZStack {
-                                    Circle().fill(KitCategory(name: account.kindResolved).avatar.background)
-                                    Text(initials(account.name))
-                                        .font(.kit(.medium, 16))
-                                        .foregroundStyle(KitColor.white)
-                                }
-                                .frame(width: 56, height: 56)
-                                Text(account.name)
-                                    .font(.kitSmallMedium)
-                                    .foregroundStyle(KitColor.black)
-                                    .lineLimit(1)
-                                    .frame(maxWidth: 72)
-                            }
-                        }
-                        .buttonStyle(.plain)
+                        .frame(width: 56, height: 56)
+                        Text("Log").font(.kitSmallMedium).foregroundStyle(KitColor.black)
                     }
                 }
-                .padding(.horizontal, 20)
+                .accessibilityLabel("Log Spending")
+                ForEach(group?.accounts ?? store.accounts) { account in
+                    NavigationLink(value: Route.account(account)) {
+                        VStack(spacing: 4) {
+                            ZStack {
+                                Circle().fill(KitCategory(name: account.kindResolved).avatar.background)
+                                Text(initials(account.name))
+                                    .font(.kit(.medium, 16))
+                                    .foregroundStyle(KitColor.white)
+                            }
+                            .frame(width: 56, height: 56)
+                            Text(account.name)
+                                .font(.kitSmallMedium)
+                                .foregroundStyle(KitColor.black)
+                            Text(Money.text(account.currentCents, currency: account.currency))
+                                .font(.kitSmall)
+                                .monospacedDigit()
+                                .foregroundStyle(KitColor.black.opacity(0.7))
+                                .minimumScaleFactor(0.7)
+                        }
+                        .lineLimit(1)
+                        .frame(maxWidth: 72)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
+            .padding(.horizontal, 20)
         }
         .padding(.bottom, 14)
     }
@@ -218,7 +244,7 @@ struct DashboardView: View {
         case .failed(let error):
             InlineError(error: error)
         case .loaded(let all):
-            let shown = all.filter { range.includes($0) && (accountName == nil || $0.account == accountName) }
+            let shown = all.filter { range.includes($0) && onPage($0) }
             if shown.isEmpty {
                 Text(all.isEmpty ? "Nothing logged yet." : "Nothing \(range.phrase).")
                     .font(.kitSmall)
@@ -239,6 +265,11 @@ struct DashboardView: View {
                 .padding(.top, 8)
             }
         }
+    }
+
+    /// Whether a row belongs to an account on the card's page.
+    private func onPage(_ transaction: LedgerTransaction) -> Bool {
+        group?.accounts.contains { $0.name == transaction.account } ?? true
     }
 
     // MARK: Loading
