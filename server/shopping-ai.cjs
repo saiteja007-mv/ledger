@@ -11,6 +11,7 @@ const MODEL = 'claude-opus-5-5'
 // a run must end well before that or the next tick could claim a second paid call while this one is still going.
 const CALL_MS = 105000
 const HISTORY_DAYS = 90
+const CHANGED_GAP_MS = 15 * 60000   // new receipts or Used up taps trigger a run at most this often
 const DEFAULT_KEY_FILE = path.join(__dirname, '..', '.data', 'anthropic-key.txt')
 
 // Missing, unreadable or blank is "no key"; never throws.
@@ -67,10 +68,12 @@ async function runShoppingAI({ db, today = localDay(new Date()), client = null, 
   if (!key) return { ok: false, message: 'no API key: rules only' }
 
   const items = db.inventory({ today })   // tracked items only: off, once and lapsed are left out
+  const list = db.shoppingList({ today }).items
+  if (!items.length && !list.length) return { ok: false, message: 'nothing to plan yet: rules only' }   // a paid call with nothing in it
   const purchases = items.flatMap((i) => db.priceHistory(i.item_key, { unit: i.unit })
     .filter((p) => dayNum(today) - dayNum(p.purchased_at) <= HISTORY_DAYS)   // a garbage date is NaN, so false
     .map((p) => ({ ...p, date: p.purchased_at.slice(0, 10) })))
-  const params = buildRequest({ today, items, purchases, list: db.shoppingList({ today }).items })
+  const params = buildRequest({ today, items, purchases, list })
 
   let reply
   try {
@@ -88,15 +91,16 @@ async function runShoppingAI({ db, today = localDay(new Date()), client = null, 
   try { out = JSON.parse((reply.content || []).filter((b) => b?.type === 'text').map((b) => b.text).join('')) } catch { return unreadable }
   if (!out || typeof out !== 'object' || Array.isArray(out)) return unreadable
 
-  const n = db.applyShoppingAI(out)   // clips, refuses owner rows and dismissed items itself
+  const n = db.applyShoppingAI(out, { today })   // clips, refuses owner rows and dismissed items itself
   return { ok: true, message: `updated by Claude: +${n.added} −${n.removed}` }
 }
 
 // Why a run is due now, or null. A request wins over a change, a change over the daily run.
 // A failed run still stores its marker, so it waits for something new or the next daily time.
+// A change runs at most once per CHANGED_GAP_MS: a pile of receipts is one paid call, not one each.
 function shoppingRunDue({ state, marker, now, dailyAt = '06:00' }) {
   if (state.requested_at) return 'requested'
-  if (marker !== state.last_marker) return 'changed'
+  if (marker !== state.last_marker && (!state.last_run_at || now - Date.parse(state.last_run_at) >= CHANGED_GAP_MS)) return 'changed'
   const [h, m] = dailyAt.split(':').map(Number), at = new Date(now)
   at.setHours(h, m, 0, 0)
   return now >= at && (!state.last_run_at || Date.parse(state.last_run_at) < at) ? 'daily' : null
@@ -111,7 +115,7 @@ async function shoppingTick({ db, now = new Date(), dailyAt = '06:00', client = 
   let r = { ok: false, message: 'run failed' }
   try { r = await runShoppingAI({ db, today: localDay(now), client, keyFile, signal: stop.signal, timeoutMs }) }
   catch (e) { r = { ok: false, message: `run failed (${e?.name})` } }
-  finally { clearTimeout(timer); db.finishShoppingRun({ ok: r.ok, message: r.message, marker }) }
+  finally { clearTimeout(timer); db.finishShoppingRun({ ok: r.ok, message: r.message, marker, now }) }
   return why
 }
 

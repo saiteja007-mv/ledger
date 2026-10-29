@@ -87,6 +87,12 @@ test('an API error is recorded without the key or the body', async () => {
   const net = await ai.runShoppingAI({ db, today: T, keyFile, client: { beta: { messages: { create: async () => { throw new TypeError('sk-test') } } } } })
   assert.equal(net.message, 'Claude unavailable (TypeError)')
 })
+test('nothing tracked and nothing listed: the rules run, Claude is not called', async () => {
+  let rules = 0; const seen = {}
+  const empty = { refreshShoppingRules: () => rules++, inventory: () => [], shoppingList: () => ({ items: [] }), priceHistory: () => [], applyShoppingAI: () => ({}) }
+  const r = await ai.runShoppingAI({ db: empty, today: T, keyFile, client: stub(ok({}), seen) })
+  assert.deepEqual([r.ok, r.message, rules, seen.params], [false, 'nothing to plan yet: rules only', 1, undefined])
+})
 
 test('shoppingRunDue: requested, changed, daily, else null', () => {
   const at = (s) => new Date(s)   // no zone suffix = local time, which is what dailyAt means
@@ -99,12 +105,20 @@ test('shoppingRunDue: requested, changed, daily, else null', () => {
   assert.equal(due({ ...idle, last_run_at: at('2026-10-11T07:00:00').toISOString() }, 'm1', '2026-10-12T05:59:00'), null, 'before the daily time')
   assert.equal(due({ ...idle, last_run_at: at('2026-10-12T06:10:00').toISOString() }, 'm1', '2026-10-12T20:00:00'), null, 'already ran since the daily time')
   assert.equal(due(idle, 'm1', '2026-10-12T08:00:00'), null)
+  // a change waits until 15 minutes after the last run; a request and the daily run do not
+  assert.equal(due(idle, 'm2', '2026-10-12T07:14:59'), null, 'a change inside 15 minutes waits')
+  assert.equal(due(idle, 'm2', '2026-10-12T07:15:00'), 'changed')
+  assert.equal(due({ ...idle, requested_at: '2026-10-12T07:01:00Z' }, 'm2', '2026-10-12T07:01:00'), 'requested')
+  assert.equal(due({ ...idle, last_run_at: at('2026-10-12T05:55:00').toISOString() }, 'm2', '2026-10-12T06:05:00'), 'daily')
+  assert.equal(due({ ...idle, last_run_at: null }, 'm2', '2026-10-12T05:00:00'), 'changed', 'never ran')
 })
 
 test('a tick runs once, records the result, and a failure is not hammered', async () => {
   let calls = 0
   const client = (fn) => ({ beta: { messages: { create: async () => (calls++, fn()) } } })
-  const now = new Date(), tick = (c) => ai.shoppingTick({ db, client: c, keyFile, now, dailyAt: '00:00' })   // 00:00 so the daily rule cannot fire mid-test
+  // 00:00 so the daily rule cannot fire mid-test; `later` is past the 15-minute wait for a change
+  const now = new Date(), later = new Date(+now + 15 * 60000)
+  const tick = (c, at = now) => ai.shoppingTick({ db, client: c, keyFile, now: at, dailyAt: '00:00' })
   db.requestShoppingRefresh()
   assert.equal(await tick(client(() => ok({}))), 'requested')
   let s = db.shoppingState()
@@ -113,10 +127,11 @@ test('a tick runs once, records the result, and a failure is not hammered', asyn
 
   buy('2026-10-10', 'Test milk 1 gal', 3.49)   // new data
   const err = Object.assign(new Error('Overloaded sk-test'), { status: 529 })
-  assert.equal(await tick(client(() => { throw err })), 'changed')
+  assert.equal(await tick(client(() => { throw err })), null, 'a change right after a run waits'); assert.equal(calls, 1)
+  assert.equal(await tick(client(() => { throw err }), later), 'changed')
   s = db.shoppingState()
   assert.deepEqual([s.last_ok, s.last_message], [0, 'Claude unavailable (529)'])
-  assert.equal(await tick(client(() => { throw err })), null, 'failed, but not retried until something new happens'); assert.equal(calls, 2)
+  assert.equal(await tick(client(() => { throw err }), later), null, 'failed, but not retried until something new happens'); assert.equal(calls, 2)
 
   db.claimShoppingRun(new Date())   // another process is mid-run
   db.requestShoppingRefresh()

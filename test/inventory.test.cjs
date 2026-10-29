@@ -51,6 +51,8 @@ test('non-product lines never count', () => {
   assert.equal(inv.isProductLine('Tip', 300), false)
   assert.equal(inv.isProductLine('Rice 5 lb bag', 899), true)
   assert.equal(inv.isProductLine('Q-tip cotton swabs', 299), true)
+  for (const n of ['Taxes', 'State taxes', 'Fees', 'Bottle deposits', 'Deposit']) assert.equal(inv.isProductLine(n, 50), false, n)
+  assert.equal(inv.isProductLine('Fish feed', 499), true)
 })
 test('inventory from receipts, mark_used_up and tracking', () => {
   for (const d of ['2026-10-01', '2026-10-07']) db.addReceipt({ merchant: 'Corner Market', purchased_at: `${d}T10:00:00`, total_cents: 349, line_items: [{ name: 'Test oat milk 1 gal', price: 3.49 }, { name: 'Sales tax', price: 0.2 }] })
@@ -98,4 +100,21 @@ test('Used up only sees product lines, never tax, fee or credit lines', () => {
   assert.throws(() => db.markUsedUp({ item_key: 'sale tax', at: '2026-10-21' }), /no purchases of sale tax/)
   assert.throws(() => db.markUsedUp({ item_key: 'test refund credit', at: '2026-10-21' }), /no purchases of test refund credit/)
   assert.equal(raw.prepare("SELECT COUNT(*) n FROM item_events WHERE item_key IN ('sale tax','test refund credit')").get().n, 0)
+})
+
+// ── final review fixes ────────────────────────────────────────────────────────
+test('Used up refuses an impossible or future day, and takes today itself', () => {
+  const k = 'test oat milk', T = '2026-10-25'
+  for (const at of ['2026-02-30', '2026-13-01', '0000-01-01', 'yesterday', '', null])
+    assert.throws(() => db.markUsedUp({ item_key: k, at, today: T }), /at must be a real date as YYYY-MM-DD/, String(at))
+  assert.throws(() => db.markUsedUp({ item_key: k, at: '2027-10-10', today: T }), /at 2027-10-10 is after today \(2026-10-25\)/)
+  assert.throws(() => db.markUsedUp({ item_key: k, at: '2026-10-26', today: T }), /after today/)
+  assert.deepEqual(db.markUsedUp({ item_key: k, at: `${T}T21:00:00`, today: T }).at, T)
+  assert.equal(raw.prepare("SELECT COUNT(*) n FROM item_events WHERE at > ?").get(T).n, 0)
+})
+test('a status filter for off, once or lapsed finds those without include_untracked', () => {
+  db.addReceipt({ merchant: 'Corner Market', purchased_at: '2026-10-02', total_cents: 199, line_items: [{ name: 'Test vinegar 16 oz', price: 1.99 }] })
+  assert.deepEqual(db.inventory({ q: 'test oat milk', status: 'off', today: '2026-10-12' }).map((i) => i.status), ['off'])
+  assert.deepEqual(db.inventory({ q: 'test vinegar', status: 'once', today: '2026-10-12' }).map((i) => i.status), ['once'])
+  assert.equal(db.inventory({ q: 'test vinegar', today: '2026-10-12' }).length, 0, 'no filter still hides them')
 })

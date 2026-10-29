@@ -144,3 +144,39 @@ test('the model key is stored only when receipts know it, else the name decides'
   const keys = open().items.filter((x) => /^(flour sack|another thing)$/i.test(x.name)).map((x) => x.item_key)
   assert.deepEqual(keys, ['test flour', 'another thing'])
 })
+
+// ── final review fixes ────────────────────────────────────────────────────────
+const listed = (key, today) => open(today).items.some((r) => r.item_key === key)
+test('bought through the list by a receipt, it comes back once it runs low again', () => {
+  buy('2026-10-01', 'Test yogurt 32 oz', 2.99); buy('2026-10-07', 'Test yogurt 32 oz', 2.99)   // lasts 6 days
+  db.refreshShoppingRules({ today: '2026-10-12' })
+  assert.ok(listed('test yogurt', '2026-10-12'), 'suggested: ~1 day left')
+  buy('2026-10-13', 'Test yogurt 32 oz', 2.99)                                                  // the receipt closes the row
+  assert.ok(!listed('test yogurt', '2026-10-13'))
+  db.refreshShoppingRules({ today: '2026-10-16' })
+  assert.ok(!listed('test yogurt', '2026-10-16'), '3 days left is in stock: the restock still holds it back')
+  db.refreshShoppingRules({ today: '2026-10-18' })
+  assert.equal(db.inventory({ q: 'test yogurt', today: '2026-10-18' })[0].status, 'running_low')
+  assert.ok(listed('test yogurt', '2026-10-18'), 'running low again: back on the list')
+})
+test('ticked bought with no receipt, it comes back once it runs low again, for the rules and the AI', () => {
+  buy('2026-09-01', 'Test coffee 12 oz', 8.99); buy('2026-10-01', 'Test coffee 12 oz', 8.99)   // lasts 30 days
+  db.refreshShoppingRules({ today: '2026-10-29' })
+  const row = open('2026-10-29').items.find((r) => r.item_key === 'test coffee')
+  db.updateShoppingList({ bought: [row.id], today: '2026-10-29' })
+  db.refreshShoppingRules({ today: '2026-11-20' })
+  assert.ok(!listed('test coffee', '2026-11-20'), 'restocked by the tick')
+  assert.equal(db.applyShoppingAI({ add: [{ item_key: null, name: 'Test coffee' }] }, { today: '2026-11-20' }).refused, 1)
+  assert.equal(db.inventory({ q: 'test coffee', today: '2026-11-27' })[0].status, 'running_low')
+  assert.equal(db.applyShoppingAI({ add: [{ item_key: null, name: 'Test coffee' }] }, { today: '2026-11-27' }).added, 1)
+  db.refreshShoppingRules({ today: '2026-11-27' })
+  assert.equal(open('2026-11-27').items.filter((r) => r.item_key === 'test coffee').length, 1, 'once, not twice')
+})
+test('qty above 999 is clipped to 999', () => {
+  assert.deepEqual([shopping.cleanQty(5000), shopping.cleanQty(999), shopping.cleanQty(2.5), shopping.cleanQty(0)], [999, 999, 2.5, null])
+  db.applyShoppingAI({ add: [{ item_key: null, name: 'Test sugar', qty: 1e9, reason: 'r' }] })
+  const sugar = open().items.find((r) => r.name === 'Test sugar')
+  assert.equal(sugar.qty, 999)
+  db.applyShoppingAI({ update: [{ id: sugar.id, qty: 1e6, reason: 'r' }] })
+  assert.equal(open().items.find((r) => r.id === sugar.id).qty, 999)
+})

@@ -18,6 +18,8 @@ const ruleSuggestions = (items) => items.filter(isLow).map((i) =>
 
 const clip = (s, n) => String(s ?? '').trim().slice(0, n)
 // A quantity is a number above zero; anything else (negative, text, missing) means "unspecified".
-const cleanQty = (q) => (Number.isFinite(Number(q)) && Number(q) > 0 ? Number(q) : null)
+// Above QTY_MAX is clipped to it: no household buys 10^9 of anything, and it keeps the total sane.
+const QTY_MAX = 999
+const cleanQty = (q) => (Number.isFinite(Number(q)) && Number(q) > 0 ? Math.min(QTY_MAX, Number(q)) : null)
 
 module.exports = { ruleSuggestions, clip, cleanQty, NAME_MAX, REASON_MAX, MAX_AI_ADDS }
