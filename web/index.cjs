@@ -436,6 +436,35 @@ async function api(req, res, url) {
     return json(res, 200, { item_key, history: db.priceHistory(item_key, { unit: q.get('unit') || null }) })
   }
 
+  // Inventory and Shopping List. "Update now" only sets the refresh marker: the timer started below is
+  // the one place that calls Claude, so no route here ever waits on it.
+  if (GET && p === '/inventory') {
+    const untracked = q.get('include_untracked')
+    return json(res, 200, db.inventory({ q: q.get('q') || null, include_untracked: untracked === '1' || untracked === 'true', today: today() }))
+  }
+  if (POST && p === '/inventory/used-up') {
+    const b = await readJson(req)
+    if (typeof b.item_key !== 'string' || !b.item_key) return json(res, 400, { ok: false, error: 'item_key required' })
+    try {
+      return json(res, 200, { ok: true, ...db.markUsedUp({ item_key: b.item_key, unit: b.unit || null, at: today(), actor }) })
+    } catch (e) {
+      if (/^no purchases of /.test(e.message)) return json(res, 400, { ok: false, error: e.message })
+      throw e
+    }
+  }
+  if (POST && p === '/inventory/tracking') {
+    const b = await readJson(req)
+    if (typeof b.item_key !== 'string' || !b.item_key || typeof b.unit !== 'string' || !b.unit) return json(res, 400, { ok: false, error: 'item_key and unit required' })
+    if (b.tracked !== null && typeof b.tracked !== 'boolean') return json(res, 400, { ok: false, error: 'tracked must be true, false or null' })
+    return json(res, 200, { ok: true, ...db.setItemTracking({ item_key: b.item_key, unit: b.unit, tracked: b.tracked, actor }) })
+  }
+  if (GET && p === '/shopping') return json(res, 200, db.shoppingList({ today: today() }))
+  if (POST && p === '/shopping/refresh') return json(res, 200, { ok: true, ...db.requestShoppingRefresh() })
+  if (POST && p === '/shopping') {
+    const { add, bought, dismiss, remove } = await readJson(req)
+    return json(res, 200, { ok: true, ...db.updateShoppingList({ add, bought, dismiss, remove, actor, today: today() }) })
+  }
+
   // Raw-bytes upload. No multipart parser: the browser can POST a File directly as the
   // body, which makes this a Buffer write instead of a dependency and a state machine.
   if (POST && p === '/upload') {

@@ -349,8 +349,27 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='ht
 /* .acct-icon's only base rule in this file is scoped to #acctList (see the accounts block
    below) — pxRow() reuses the same 44x44 icon-well markup, so it needs the identical
    scoped recipe here too, or the icon renders with no box at all. */
-#pxList .acct-icon{width:44px;height:44px;border-radius:9px;background:var(--surface-soft);
+#pxList .acct-icon,#invList .acct-icon{width:44px;height:44px;border-radius:9px;background:var(--surface-soft);
   color:var(--ink);display:grid;place-items:center;flex:0 0 auto}
+
+/* ── inventory + shopping list: the Prices row shell, plus a usage bar and a tick ── */
+#invList,#shList{display:flex;flex-direction:column;gap:var(--s-xs)}
+#invList .acct-group-head,#shList .acct-group-head{margin-top:var(--s-sm)}
+.inv-row{cursor:pointer}.sh-row{cursor:default}
+.inv-row .track{height:6px;margin-top:var(--s-xs)}
+.inv-right{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:var(--s-xs);min-width:88px;padding-left:var(--s-xs)}
+/* .sec above is a section margin; as .btn.sec's second class it also gives the button a 32px bottom margin */
+.inv-right .btn,#shRefresh{margin:0}
+.inv-off-head{display:flex;justify-content:space-between;width:100%;margin-top:var(--s-sm);padding:4px 0 6px;
+  background:none;border:0;font:inherit;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.04em;cursor:pointer;text-align:left}
+.inv-right .linkbtn{font-size:12px;font-weight:500;color:var(--muted)}
+.sh-add{display:flex;gap:var(--s-xs);margin-bottom:var(--s-md)}
+.sh-add input[type=number]{width:84px;flex:0 0 auto}
+.sh-tick{width:28px;height:28px;flex:0 0 auto;border-radius:var(--r-pill);border:2px solid var(--muted);
+  background:none;color:var(--ink);cursor:pointer;padding:0}
+.sh-tick:active{background:var(--surface-soft)}
+.sh-foot{margin-top:var(--s-md)}
 /* .g3 collapses to a single column under 767px (see .grid rules above) — fine for a form
    grid, wrong for 3 compact stat tiles that read fine narrow; #kpis gets the same kind of
    mobile override for its own g4. Placed after that rule so it wins on specificity-tie. */
@@ -1250,6 +1269,24 @@ footer .mono{color:var(--on-dark-soft);opacity:.7}
       <div id="pxList"></div>
     </section>
 
+    <section class="view" id="v-inventory">
+      <div class="sec-head"><h2>Inventory</h2></div>
+      <div class="search-field"><svg class="ico" aria-hidden="true"><use href="#i-search"/></svg><input id="invQ" type="search" placeholder="Search items…"></div>
+      <div class="acct-meta" id="invMeta" style="margin:var(--s-xs) 0 var(--s-md)"></div>
+      <div id="invList"></div>
+    </section>
+
+    <section class="view" id="v-shopping">
+      <div class="sec-head"><h2>Shopping List</h2><button class="btn sec sm" id="shRefresh" type="button">Update now</button></div>
+      <form class="sh-add" id="shAdd">
+        <input id="shName" type="text" placeholder="Add an item…" aria-label="Item name" autocomplete="off" required>
+        <input id="shQty" type="number" min="0" step="any" inputmode="decimal" placeholder="Qty" aria-label="Quantity (optional)">
+        <button class="btn" type="submit">Add</button>
+      </form>
+      <div id="shList"></div>
+      <div class="acct-meta sh-foot" id="shFoot"></div>
+    </section>
+
   </main>
 
   <footer>
@@ -1593,7 +1630,7 @@ $('#tabbarFab').onclick = () => $('#addTx').click()
 
 // Views the bottom bar has no slot for; reachable through "More" now that the top nav
 // is hidden on mobile.
-const MORE_VIEWS = [['prices', 'bar', 'Prices'], ['budgets', 'budget', 'Budgets'], ['receipts', 'file', 'Receipts'],
+const MORE_VIEWS = [['prices', 'bar', 'Prices'], ['inventory', 'food', 'Inventory'], ['shopping', 'shopping', 'Shopping List'], ['budgets', 'budget', 'Budgets'], ['receipts', 'file', 'Receipts'],
   ['review', 'eye', 'Review'], ['categories', 'folder', 'Categories']]
 $('#tabbarMore').onclick = () => {
   const pending = $('#revCount').hidden ? '' : $('#revCount').textContent
@@ -1611,7 +1648,8 @@ function go(v) {
   location.hash = v
   window.scrollTo({ top: 0, behavior: 'instant' })
   const load = { overview: loadOverview, transactions: loadTx, receipts: loadReceipts, review: loadReview,
-    categories: loadCategories, budgets: loadBudgets, accounts: loadAccounts, prices: loadPrices }[v]
+    categories: loadCategories, budgets: loadBudgets, accounts: loadAccounts, prices: loadPrices,
+    inventory: loadInventory, shopping: loadShopping }[v]
   if (load) load()
 }
 
@@ -2687,6 +2725,162 @@ function pxRow(it) {
       <div class="px-delta">${delta(it.change_pct)}</div>
     </div>
   </button>`
+}
+
+// ── inventory ─────────────────────────────────────────────────────────────
+// Everything printed here (names, units, merchants, reasons, the AI message) goes through esc().
+const INV_SECTIONS = [['running_low', 'Running low'], ['in_stock', 'In stock'], ['used_up', 'Used up'], ['learning', 'Learning']]
+const INV_UNTRACKED = { off: 'Not tracking', once: 'Bought once', lapsed: 'Not bought lately' }
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
+const qtyUnit = (q, u) => `${fmtQty(q)} ${unitShort(u)}`
+
+let INV = []
+let invOffOpen = false
+async function loadInventory() {
+  INV = await api('/inventory?include_untracked=1')
+  renderInventory()
+}
+
+function renderInventory() {
+  const q = $('#invQ').value.trim().toLowerCase()
+  const rows = INV.filter((it) => !q || it.item_key.toLowerCase().includes(q) || it.name.toLowerCase().includes(q))
+  const off = rows.filter((it) => INV_UNTRACKED[it.status])
+  const tracked = rows.filter((it) => !INV_UNTRACKED[it.status])
+  const nOff = INV.filter((it) => INV_UNTRACKED[it.status]).length
+  $('#invMeta').textContent = `${INV.length - nOff} tracked · ${nOff} not tracked`
+  let html = INV_SECTIONS.map(([st, label]) => {
+    const r = tracked.filter((it) => it.status === st)
+    if (st === 'running_low') r.sort((a, b) => a.days_left - b.days_left)
+    return r.length ? `<div class="acct-group-head"><span>${label}</span><span>${r.length}</span></div>${r.map(invRow).join('')}` : ''
+  }).join('')
+  if (off.length) {
+    html += `<button type="button" class="inv-off-head" data-act="toggle-off" aria-expanded="${invOffOpen}">` +
+      `<span>Not tracked</span><span>${off.length} ${invOffOpen ? '▾' : '▸'}</span></button>${invOffOpen ? off.map(invRow).join('') : ''}`
+  }
+  $('#invList').innerHTML = !INV.length
+    ? '<div class="empty">No receipt items yet — items you buy more than once show up here.</div>'
+    : !rows.length ? '<div class="empty">Nothing matches.</div>'
+    : html || '<div class="empty">Nothing tracked yet — items you buy more than once show up here.</div>'
+}
+
+function invRow(it) {
+  const untracked = INV_UNTRACKED[it.status]
+  const usedBtn = '<button type="button" class="btn sec sm" data-act="used">Used up</button>'
+  const stopBtn = '<button type="button" class="linkbtn" data-act="untrack">Don’t track</button>'
+  let s, meta = '', bar = '', btn = ''
+  if (untracked) {
+    s = `${untracked} · last bought ${dshort(it.last_bought)}`
+    if (it.status !== 'lapsed') btn = '<button type="button" class="btn sec sm" data-act="track">Track</button>'
+  } else if (it.status === 'learning') {
+    s = `Bought ${dshort(it.last_bought)} · ${qtyUnit(it.last_qty, it.unit)} · learning`
+    btn = usedBtn + stopBtn
+  } else {
+    const used = it.status === 'used_up'
+    const pct = Math.min(100, Math.max(0, Number(it.used_pct) || 0))
+    s = used ? 'Used up' : `${qtyUnit(it.qty_left, it.unit)} left`
+    meta = `${used ? '' : `${it.days_left ? `~${plural(it.days_left, 'day')} left` : 'due now'} · `}lasts ~${plural(it.lasts_days, 'day')}`
+    bar = `<div class="track"><i class="${used ? 'bad' : it.status === 'running_low' ? 'warn' : ''}" style="width:${pct}%"></i></div>`
+    btn = (used ? '' : usedBtn) + stopBtn
+  }
+  return `<div class="rowcard inv-row" role="button" tabindex="0" data-item="${esc(it.item_key)}" data-unit="${esc(it.unit)}">
+    <div class="acct-icon"><svg class="ico" aria-hidden="true"><use href="#i-${WEIGHT_VOL.includes(it.unit) ? 'food' : 'cart'}"/></svg></div>
+    <div class="grow">
+      <div class="t">${esc(titleCase(it.name))}</div>
+      <div class="s">${esc(s)}</div>${bar}
+      ${meta ? `<div class="acct-meta">${esc(meta)}</div>` : ''}
+    </div>
+    <div class="inv-right">${btn}</div>
+  </div>`
+}
+
+$('#invQ').addEventListener('input', renderInventory)
+$('#invList').addEventListener('click', async (e) => {
+  const a = e.target.closest('[data-act]')
+  if (a && a.dataset.act === 'toggle-off') { invOffOpen = !invOffOpen; return renderInventory() }
+  const row = e.target.closest('.inv-row')
+  if (!row) return
+  if (!a) return openPrice(row.dataset.item, row.dataset.unit).catch((err) => toast(err.message))
+  const body = { item_key: row.dataset.item, unit: row.dataset.unit }
+  a.disabled = true
+  try {
+    if (a.dataset.act === 'used') { await post('/inventory/used-up', body); toast('Marked used up') }
+    else { const on = a.dataset.act === 'track'; await post('/inventory/tracking', { ...body, tracked: on }); toast(on ? 'Tracking it' : 'Not tracking it') }
+    loadInventory()
+  } catch (err) { toast(err.message); a.disabled = false }
+})
+$('#invList').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.classList.contains('inv-row')) openPrice(e.target.dataset.item, e.target.dataset.unit).catch((err) => toast(err.message))
+})
+
+// ── shopping list ─────────────────────────────────────────────────────────
+const ago = (iso) => {
+  if (!iso || Number.isNaN(Date.parse(iso))) return ''
+  const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000))
+  return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`
+}
+
+let shTimer
+async function loadShopping(poll = 0) {
+  clearTimeout(shTimer)
+  const sh = await api('/shopping')
+  renderShopping(sh)
+  // A queued run finishes within a couple of minutes; look again every few seconds, then stop asking.
+  if (sh.ai.pending && poll < 45) shTimer = setTimeout(() => {
+    if ($('#v-shopping').classList.contains('on')) loadShopping(poll + 1).catch(() => {})
+  }, 4000)
+}
+
+function renderShopping({ items, total_cents, ai }) {
+  $('#shList').innerHTML = !items.length
+    ? '<div class="empty">Nothing to buy. Items that run low show up here, or add your own above.</div>'
+    : `<div class="acct-group-head"><span>${plural(items.length, 'item')}</span>${items.some((r) => r.last_price_cents != null) ? `<span>Est. total ${fmt(total_cents)}</span>` : ''}</div>${items.map(shRow).join('')}`
+  const status = ai.pending ? 'Updating…'
+    : ai.ok === true ? `Updated by Claude ${ago(ai.last_run_at)}`.trim()
+    : ai.ok === false && ai.message ? `Rules only: ${ai.message}` : 'Rules only'
+  $('#shFoot').innerHTML = esc(status)
+  $('#shRefresh').disabled = !!ai.pending
+}
+
+function shRow(r) {
+  const mine = r.source === 'user'
+  const act = mine ? 'remove' : 'dismiss'
+  const label = mine ? 'Remove' : 'Dismiss'
+  const why = r.reason || (mine ? 'Added by you' : '')
+  const hint = r.last_price_cents == null ? '' : `${fmt(r.last_price_cents)}${r.cheapest_merchant ? ` · cheapest at ${r.cheapest_merchant}` : ''}`
+  return `<div class="rowcard sh-row">
+    <button type="button" class="sh-tick" data-act="bought" data-id="${Number(r.id)}" aria-label="${esc(`Bought ${r.name}`)}" title="Bought"></button>
+    <div class="grow">
+      <div class="t">${esc(titleCase(r.name))}${r.qty != null ? `<span class="px-unit">× ${esc(fmtQty(r.qty))}</span>` : ''}</div>
+      ${why ? `<div class="s">${esc(why)}</div>` : ''}
+      ${hint ? `<div class="acct-meta">${esc(hint)}</div>` : ''}
+    </div>
+    <button type="button" class="icobtn" data-act="${act}" data-id="${Number(r.id)}" aria-label="${esc(`${label} ${r.name}`)}" title="${label}"><svg class="ico sm" aria-hidden="true"><use href="#i-${mine ? 'trash' : 'close'}"/></svg></button>
+  </div>`
+}
+
+$('#shAdd').onsubmit = async (e) => {
+  e.preventDefault()
+  const name = $('#shName').value.trim(), qty = $('#shQty').value
+  if (!name) return
+  try {
+    await post('/shopping', { add: [{ name, qty: qty === '' ? undefined : Number(qty) }] })
+    $('#shName').value = ''; $('#shQty').value = ''
+    loadShopping()
+  } catch (err) { toast(err.message) }
+}
+$('#shList').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-act]')
+  if (!b) return
+  b.disabled = true
+  try { await post('/shopping', { [b.dataset.act]: [Number(b.dataset.id)] }); loadShopping() }
+  catch (err) { toast(err.message); b.disabled = false }
+})
+$('#shRefresh').onclick = async () => {
+  try {
+    await post('/shopping/refresh', {})
+    $('#shRefresh').disabled = true; $('#shFoot').textContent = 'Updating…'
+    loadShopping()
+  } catch (err) { toast(err.message) }
 }
 
 // The x-axis is one tick per purchase, not proportional to elapsed time — purchases weeks
