@@ -4,11 +4,12 @@
 // run time and goes nowhere but the Anthropic client: not into params, status messages, logs or errors.
 const fs = require('node:fs')
 const path = require('node:path')
-const Anthropic = require('@anthropic-ai/sdk')
 const { dayNum } = require('./inventory.cjs')
 
 const MODEL = 'claude-opus-5-5'
-const CALL_MS = 120000   // the whole run, and the Anthropic client's own timeout
+// The whole run, and the Anthropic client's own timeout. db.cjs frees a run's lock after RUN_LOCK_MS (120 s), so
+// a run must end well before that or the next tick could claim a second paid call while this one is still going.
+const CALL_MS = 105000
 const HISTORY_DAYS = 90
 const DEFAULT_KEY_FILE = path.join(__dirname, '..', '.data', 'anthropic-key.txt')
 
@@ -60,7 +61,7 @@ function buildRequest({ today, items, purchases, list }) {
 
 // Rules first, then Claude. Resolves { ok, message } and never throws on anything Claude does.
 // ponytail: sends the whole 90-day history of every tracked item; a household fits, cap it if a list ever grows huge.
-async function runShoppingAI({ db, today = localDay(new Date()), client = null, keyFile, signal } = {}) {
+async function runShoppingAI({ db, today = localDay(new Date()), client = null, keyFile, signal, timeoutMs = CALL_MS } = {}) {
   db.refreshShoppingRules({ today })
   const key = readKey(keyFile)
   if (!key) return { ok: false, message: 'no API key: rules only' }
@@ -73,8 +74,11 @@ async function runShoppingAI({ db, today = localDay(new Date()), client = null, 
 
   let reply
   try {
-    reply = await (client || new Anthropic({ apiKey: key, timeout: CALL_MS })).beta.messages.create(params, { signal })
+    // required here, not at the top: ledger-web still starts if the package is missing, and no-key runs never load it
+    reply = await (client || new (require('@anthropic-ai/sdk'))({ apiKey: key, timeout: timeoutMs })).beta.messages.create(params, { signal })
   } catch (err) {
+    // our abort, or the SDK's own timeout (both are plain `Error` by name with no status, so look at the class)
+    if (signal?.aborted || /Abort|Timeout/.test(err?.constructor?.name)) return { ok: false, message: 'Claude timed out: rules only' }
     return { ok: false, message: `Claude unavailable (${err?.status ?? err?.name})` }   // never err.message: it can echo the request
   }
   if (reply?.stop_reason === 'refusal') return { ok: false, message: 'Claude declined: rules only' }
@@ -99,13 +103,13 @@ function shoppingRunDue({ state, marker, now, dailyAt = '06:00' }) {
 }
 
 // One timer tick. Resolves the reason it ran, or null. Claude and the lock are in here so a test can drive it.
-async function shoppingTick({ db, now = new Date(), dailyAt = '06:00', client = null, keyFile } = {}) {
+async function shoppingTick({ db, now = new Date(), dailyAt = '06:00', client = null, keyFile, timeoutMs = CALL_MS } = {}) {
   const marker = db.shoppingChangeMarker()   // read BEFORE the run: data that lands meanwhile triggers another
   const why = shoppingRunDue({ state: db.shoppingState(), marker, now, dailyAt })
   if (!why || !db.claimShoppingRun(now)) return null
-  const stop = new AbortController(), timer = setTimeout(() => stop.abort(), CALL_MS)
+  const stop = new AbortController(), timer = setTimeout(() => stop.abort(), timeoutMs)
   let r = { ok: false, message: 'run failed' }
-  try { r = await runShoppingAI({ db, today: localDay(now), client, keyFile, signal: stop.signal }) }
+  try { r = await runShoppingAI({ db, today: localDay(now), client, keyFile, signal: stop.signal, timeoutMs }) }
   catch (e) { r = { ok: false, message: `run failed (${e?.name})` } }
   finally { clearTimeout(timer); db.finishShoppingRun({ ok: r.ok, message: r.message, marker }) }
   return why
@@ -119,4 +123,4 @@ function startShoppingTimer({ db, everyMs = 60000, dailyAt = '06:00', client = n
   return { stop: () => clearInterval(id) }
 }
 
-module.exports = { readKey, buildRequest, runShoppingAI, shoppingRunDue, shoppingTick, startShoppingTimer }
+module.exports = { CALL_MS, readKey, buildRequest, runShoppingAI, shoppingRunDue, shoppingTick, startShoppingTimer }

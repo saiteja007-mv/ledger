@@ -124,4 +124,24 @@ test('a tick runs once, records the result, and a failure is not hammered', asyn
   assert.ok(db.shoppingState().requested_at, 'the request is kept for the next tick')
   db.finishShoppingRun({ ok: true, message: 'x', marker: db.shoppingChangeMarker() })
 })
+test('a hung call is aborted at the timeout: timed out, lock released, nothing applied', async () => {
+  const ais = () => db.shoppingList().items.filter((x) => x.source === 'ai').length, before = ais()
+  const hung = { beta: { messages: { create: (p, opts) => new Promise((_, reject) =>   // like the SDK: rejects when the signal fires
+    opts.signal.addEventListener('abort', () => reject(new Error('Request was aborted.')))) } } }
+  db.requestShoppingRefresh()
+  assert.equal(await ai.shoppingTick({ db, client: hung, keyFile, now: new Date(), dailyAt: '00:00', timeoutMs: 50 }), 'requested')
+  const s = db.shoppingState()
+  assert.deepEqual([s.last_ok, s.last_message, s.running_since], [0, 'Claude timed out: rules only', null], 'recorded, and the lock is free')
+  assert.equal(ais(), before)
+  // the SDK's own client timeout (no abort from us) reads the same; other API errors keep their status
+  class APIConnectionTimeoutError extends Error {}
+  const slow = { beta: { messages: { create: async () => { throw new APIConnectionTimeoutError('Request timed out.') } } } }
+  assert.equal((await ai.runShoppingAI({ db, client: slow, keyFile })).message, 'Claude timed out: rules only')
+})
+test('the run ends before its lock can expire', () => {
+  assert.ok(ai.CALL_MS <= 120000 - 15000, 'RUN_LOCK_MS in db.cjs is 120 s')
+})
+test('the SDK is only loaded when a real client is needed', () => {
+  assert.ok(!Object.keys(require.cache).some((k) => k.includes('@anthropic-ai')))
+})
 test('the timer starts and stops', () => { ai.startShoppingTimer({ db, everyMs: 1e9 }).stop() })
