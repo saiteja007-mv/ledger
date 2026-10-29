@@ -36,7 +36,8 @@ The photo goes to Anthropic for reading; nothing else does.
 ## Shopping List AI
 
 **Inventory** and the **Shopping List** work without any of this. With no key, Ledger keeps a rule-based list.
-Add an Anthropic API key and Claude keeps the list instead.
+Add an Anthropic API key and Claude works on the list too: the rules still run first, and Claude adds to
+and adjusts what they put there.
 
 How Inventory learns:
 
@@ -49,14 +50,15 @@ How Inventory learns:
 - **Track** and **Don't track** override the rule for one item (track something bought once, hide a gift
   bought twice). Items that are off, bought once or lapsed wait in a collapsed **Not tracked** section.
 
-Without a key, the list suggests every tracked item that is used up, running low (about 80% of the last pack
+The rules, key or no key, suggest every tracked item that is used up, running low (about 80% of the last pack
 gone, or 2 days left) or about 3 days from running out, with the reason on each row.
 
-To let Claude keep the list:
+To let Claude work on the list:
 
-1. Put your key on one line in `.data/anthropic-key.txt`, or in any file you point `LEDGER_ANTHROPIC_KEY_FILE`
-   at (set it in the web app's environment). `.data/` is never committed.
-2. Keep that file owner-only, for example `chmod 600 .data/anthropic-key.txt`.
+1. Put your key on one line in `.data/anthropic-key.txt`. That default path works with the normal install
+   and `.data/` is never committed. To keep it elsewhere, set `LEDGER_ANTHROPIC_KEY_FILE` to the file's path
+   in the web service's own environment (`ledger-web`; the MCP server and the iPhone API never read it).
+2. Keep that file owner-only. On Linux or macOS: `chmod 600 .data/anthropic-key.txt`.
 3. Tap **Update now**. The file is read at the start of every run, so a new key needs no restart.
 
 Claude adds what you will probably need soon, changes quantities and removes what is no longer needed, each
@@ -68,19 +70,23 @@ app's own screens just ask for a run. The web app checks once a minute, and runs
 
 - you tap **Update now**, or an assistant calls `refresh_shopping_list`;
 - a receipt line or a Used up tap has changed since the last run (the first check counts, as there is no last
-  run yet); or
+  run yet), at most once every 15 minutes after the last run, so a batch of receipts is one run; or
 - the server's clock has passed 06:00 and it has not run since then.
 
-**What is sent.** Today's date; for each tracked item its name, unit, status, last bought date and quantity,
-quantity left, days left and how long a pack lasts; that item's purchases from the last 90 days (name,
-quantity, unit, unit price, store name, date); and the open list (id, name, quantity, reason, who added it).
-Not sent: account names, card digits, transaction notes or receipt photos. The key itself goes only to
-Anthropic.
+A run with no tracked items and nothing on the list does not call Claude at all; the line under the list
+says "nothing to plan yet: rules only".
+
+**What is sent.** Today's date; for each tracked item its name, `item_key` (a normalised copy of the name,
+such as `test milk`), unit, status, last bought date and quantity, quantity left, days left and how long a
+pack lasts; that item's purchases from the last 90 days (name, quantity, unit, unit price, store name,
+date); and the open list (id, `item_key`, name, quantity, reason, who added it). Not sent: account names,
+card digits, transaction notes or receipt photos. The key itself goes only to Anthropic.
 
 **What it may change.** It never changes or removes an item you added yourself; the server refuses it
-even if Claude tries. It does not put back an item you dismissed, removed or ticked off until something new
-happens for that item, a newer receipt line or a Used up tap. The rule-based suggestions follow the same
-rule. One run adds at most 40 items.
+even if Claude tries. It does not put back an item you dismissed or removed until something new happens
+for that item, a newer receipt line or a Used up tap. An item you bought (ticked off, or closed by a
+receipt) comes back once it reads running low or used up again. The rule-based suggestions follow the same
+rules. Claude adds at most 40 items per run; the rules have no cap.
 
 **When it fails.** The rule-based list is brought up to date first, so no key, a timeout (a run is cut off
 at 105 seconds), a refusal, an API error or an unreadable answer all still leave you that list. The line

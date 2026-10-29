@@ -22,7 +22,7 @@ share the namespace. This gives full parity with the MCP server without re-imple
   from `mcp.mjs` and `db.cjs`.
 - A tool added to `mcp.mjs` later appears here after `systemctl --user restart ledger-api`.
 
-REST was the alternative. It would have meant hand-mapping about 25 tools to routes and keeping the
+REST was the alternative. It would have meant hand-mapping 31 tools to routes and keeping the
 two lists in step.
 
 ### Requests and answers
@@ -56,7 +56,8 @@ Also available:
 
 Money arguments are positive. `direction` carries the sign. Dates are `YYYY-MM-DD`; `posted_at` is
 local `YYYY-MM-DDTHH:MM:SS`. Lists come back newest first, except `item_price_history`, which is
-oldest first.
+oldest first, `inventory`, which is sorted by name, and `shopping_list`, which is in the order items were
+added.
 
 | Tool | Arguments (required in bold) | Used by the app for |
 |---|---|---|
@@ -109,12 +110,13 @@ oldest first.
 | `off` | switched off with `set_item_tracking` |
 | `once` | bought on one day only, so not tracked automatically |
 
-Without `include_untracked`, `lapsed`, `off` and `once` items are left out. `q` matches the item key or
-name; `status` keeps one status.
+Without `include_untracked`, `lapsed`, `off` and `once` items are left out, unless `status` asks for one
+of them. `q` matches the item key or name; `status` keeps one status.
 
 - `mark_used_up` records "ran out" for the unit bought most recently, or the `unit` you give, on `date`
   (today by default). The same item, unit and day twice is recorded once. An item with no purchases is a 400
-  (`no purchases of <item_key>`). Returns `{item_key, unit, at}`.
+  (`no purchases of <item_key>`), and so is a `date` that is not a real day or is after today, as there is
+  no undo. Returns `{item_key, unit, at}`.
 - `set_item_tracking` has to be sent a `tracked`: `true` always tracks the item, `false` hides it, and `null`
   goes back to automatic. Returns `{item_key, unit, tracked}` with `tracked` as `1`, `0` or `null`.
 - `shopping_list` returns `{items, total, total_cents, ai}`. Each item has `id`, `item_key`, `unit`, `name`,

@@ -96,7 +96,9 @@ or has `days_left ≤ 3`.
 is closed as **bought** (tick or receipt), **dismissed** by the owner, or **removed** by the AI, neither
 the rules nor the AI re-add that `item_key` until something new happens to it: a receipt line dated after
 the close, or a Used up tap after the close. A tick with no receipt counts as a restock of the last
-purchase quantity for the estimator, so the item reads "in stock" again instead of "used up".
+purchase quantity for the estimator, so the item reads "in stock" again instead of "used up". A
+**bought** item was restocked at the close, so it also comes back once it reads running low or used up
+again: time passing is the new information *(final review, R20)*.
 
 ### AI upkeep (owner's decision: Claude API with a key file)
 
@@ -108,7 +110,8 @@ purchase quantity for the estimator, so the item reads "in stock" again instead 
   (`fallbacks: "default"`) *(builder's call; per the Claude API skill's defaults)*.
 - **When and where:** only the `ledger-web` process ever calls Claude *(builder's call)*. A timer there
   checks once a minute (one cheap SQL read) for either a **refresh requested** marker or a change in
-  `receipt_items` / Used up events since the last run, and also runs once a day at 06:00 local. The MCP
+  `receipt_items` / Used up events since the last run (a change runs at most once per 15 minutes after
+  the last run, so a pile of receipts is one paid call *(R22)*), and also runs once a day at 06:00 local. The MCP
   server, the iPhone API and the web app never call Claude themselves: `refresh_shopping_list` (and the
   web/iPhone "Update now" button) only set the marker and return at once with `queued`; the list shows
   "Updating…" until the run finishes. A lock row in SQLite stops two runs overlapping. Each run has a
@@ -202,14 +205,14 @@ Two More views styled like Prices, with the same actions as the iPhone.
 ## Rollout
 
 1. Public repo `saiteja007-mv/ledger`: PRs for server + MCP + web, then iPhone. Scrub rules apply.
-2. Owner's install: the finance-mcp agent (ideapad) ports the server and MCP changes into `~/finance-mcp`
-   and points `LEDGER_ANTHROPIC_KEY_FILE` at the key file; the iPhone changes go to
-   `saiteja007-mv/homelab-ios` (`Ledger/`) and are installed only when the owner says so.
+2. Owner's install: the agent that runs the owner's server ports the server and MCP changes there and
+   points `LEDGER_ANTHROPIC_KEY_FILE` at the key file; the iPhone changes go to the owner's private iOS
+   app repo and are installed only when the owner says so.
 
 ## Open (owner)
 
-- The path of the Claude API key file on ideapad. The code defaults to `.data/anthropic-key.txt`; the
-  install only needs the env var set to the real path.
+- The path of the Claude API key file on the owner's server. The code defaults to
+  `.data/anthropic-key.txt`; the install only needs the env var set to the real path.
 
 ## Left to the builder
 

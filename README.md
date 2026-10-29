@@ -16,7 +16,7 @@ Single user, no cloud account, no subscription, three npm dependencies.
 - **Inventory**: learns from your receipts which items you buy again and how fast you go through them, and
   shows what is in stock, running low or used up. Tap Used up when you finish one.
 - **Shopping List**: kept for you from Inventory by simple rules, with no setup. Add an Anthropic API key and
-  Claude keeps it instead, and never touches the items you add yourself
+  Claude adds to it on top of the rules, and never touches the items you add yourself
   ([docs/extras.md](docs/extras.md#shopping-list-ai)).
 - **iPhone app**: home, statistics, log spending (also from Siri, Shortcuts and a widget), receipts, item
   prices, inventory, shopping list, accounts; widgets for spending, budgets and recent transactions; Face ID
@@ -141,7 +141,7 @@ reinstate the split — the plumbing is a small diff in `mcp.mjs`.
 
 Cal.com design system, single self-contained `web/public/index.html` — no build step, no
 framework, no dependencies. Views: Overview, Transactions, Receipts, Review, Categories,
-Budgets (per category plus an overall monthly limit), Prices, Accounts.
+Budgets (per category plus an overall monthly limit), Prices, Inventory, Shopping List, Accounts.
 
 Everything the MCP tools can do, the UI can do, plus the two things chat is bad at:
 

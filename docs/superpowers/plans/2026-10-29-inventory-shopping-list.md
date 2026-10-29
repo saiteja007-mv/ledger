@@ -292,4 +292,4 @@ test('refusal or junk leaves the list alone', async () => {
 
 - [ ] **Step 1:** Write the docs with made-up examples only.
 - [ ] **Step 2:** `npm test` and the iOS build pass; scrub-scan the branch diff.
-- [ ] **Step 3:** Commit, push the branch, open one PR on `saiteja007-mv/ledger` (owner approves the merge). After merge: message the finance-mcp agent to port Tasks 1-4 and set the key env; port Tasks 6-7 to `homelab-ios` `Ledger/`; install on the phone only when the owner says "install".
+- [ ] **Step 3:** Commit, push the branch, open one PR on `saiteja007-mv/ledger` (owner approves the merge). After merge: message the agent that runs the owner's server to port Tasks 1-4 and set the key env; port Tasks 6-7 to the owner's private iOS app repo; install on the phone only when the owner says "install".
