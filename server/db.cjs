@@ -11,6 +11,7 @@ const path = require('node:path')
 const fs = require('node:fs')
 const crypto = require('node:crypto')
 const { toStoredLine } = require('./bill.cjs')
+const { isProductLine, estimateItem, dayNum } = require('./inventory.cjs')
 
 let db = null
 let dbFile = null
@@ -134,6 +135,33 @@ function initDb(file = process.env.FINANCE_DB || DEFAULT_DB) {
       UNIQUE (receipt_id, line_no)
     );
     CREATE INDEX IF NOT EXISTS receipt_items_key ON receipt_items(item_key, purchased_at);
+
+    -- Inventory + shopping list (see inventory.cjs). Both are keyed on receipt_items' (item_key, unit).
+    CREATE TABLE IF NOT EXISTS item_settings (
+      item_key TEXT NOT NULL, unit TEXT NOT NULL,
+      tracked  INTEGER,                         -- NULL = auto (2+ purchase days), 1 = on, 0 = off
+      PRIMARY KEY (item_key, unit)
+    );
+    CREATE TABLE IF NOT EXISTS item_events (
+      id INTEGER PRIMARY KEY, item_key TEXT NOT NULL, unit TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind = 'used_up'),
+      at   TEXT NOT NULL, actor TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    -- close_event_id / close_receipt_id: the newest item_events / receipts id when the row was
+    -- closed, so "new information since" never depends on clocks. restock_date: set only when the
+    -- owner ticks a row bought with no receipt; inventory() counts it as a rebuy on that day.
+    CREATE TABLE IF NOT EXISTS shopping_list (
+      id INTEGER PRIMARY KEY, item_key TEXT, unit TEXT, name TEXT NOT NULL, qty REAL,
+      source TEXT NOT NULL CHECK (source IN ('rule','ai','user')),
+      reason TEXT,
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','bought','dismissed','removed')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT, closed_at TEXT,
+      close_event_id INTEGER, close_receipt_id INTEGER, restock_date TEXT
+    );
+    CREATE TABLE IF NOT EXISTS shopping_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1), requested_at TEXT, running_since TEXT, last_run_at TEXT,
+      last_ok INTEGER, last_message TEXT, last_marker TEXT
+    );
 
     CREATE TABLE IF NOT EXISTS audit_log (
       id         INTEGER PRIMARY KEY,
@@ -633,6 +661,91 @@ function priceHistory(item_key, { unit = null } = {}) {
   ORDER BY ri.purchased_at ASC, ri.id ASC`).all(...args)
 }
 
+// ── inventory ─────────────────────────────────────────────────────────────────
+
+const localDay = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}` }
+// purchased_at is free text from the extractor. One that does not start YYYY-MM-DD would turn
+// every estimate into NaN, so such a line is simply not a purchase.
+const HAS_DAY = "purchased_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'"
+
+// Household items with what is left of each, rebuilt from receipt lines on every call.
+// ponytail: reads every dated receipt line; fine for one household, add a cache if a year of receipts feels slow.
+function inventory({ q = null, status = null, include_untracked = false, today = localDay() } = {}) {
+  const c = conn(), key = (k, u) => `${k}\0${u}`
+  const pairs = new Map(), used = new Map()
+  for (const r of c.prepare(`SELECT item_key, unit, name, qty, unit_price_cents, total_cents, merchant, purchased_at
+                               FROM receipt_items WHERE ${HAS_DAY} ORDER BY purchased_at, id`).all()) {
+    if (!isProductLine(r.name, r.total_cents)) continue
+    const k = key(r.item_key, r.unit)
+    if (!pairs.has(k)) pairs.set(k, { item_key: r.item_key, unit: r.unit, rows: [], ticks: [] })
+    pairs.get(k).rows.push(r)
+  }
+  for (const e of c.prepare("SELECT item_key, unit, at FROM item_events WHERE kind='used_up'").all()) {
+    const k = key(e.item_key, e.unit)
+    used.set(k, [...(used.get(k) || []), e.at])
+  }
+  const tracked = new Map(c.prepare('SELECT item_key, unit, tracked FROM item_settings').all().map((s) => [key(s.item_key, s.unit), s.tracked]))
+  const estimate = (p) => estimateItem({
+    purchases: [...p.rows.map((r) => ({ date: r.purchased_at, qty: r.qty })), ...p.ticks],
+    usedUp: used.get(key(p.item_key, p.unit)) || [], tracked: tracked.get(key(p.item_key, p.unit)) ?? null, today })
+
+  // Ticked bought on the shopping list with no receipt: a rebuy of the last quantity on that day,
+  // for the unit bought most recently, unless a receipt for the item already covers the day.
+  const day = (r) => r.purchased_at.slice(0, 10)
+  for (const t of c.prepare(`SELECT item_key, restock_date FROM shopping_list
+                              WHERE status='bought' AND restock_date IS NOT NULL AND item_key IS NOT NULL ORDER BY id`).all()) {
+    const mine = [...pairs.values()].filter((p) => p.item_key === t.item_key)
+    if (!mine.length || mine.some((p) => p.rows.some((r) => day(r) === t.restock_date.slice(0, 10)))) continue
+    const p = mine.reduce((a, b) => (day(b.rows.at(-1)) >= day(a.rows.at(-1)) ? b : a))
+    p.ticks.push({ date: t.restock_date, qty: estimate(p).last_qty })
+  }
+
+  // one display name per item_key, even when it was bought in two units: the alphabetically first printed name
+  const nameOf = new Map()
+  for (const p of pairs.values()) for (const r of p.rows) if (!nameOf.has(r.item_key) || r.name < nameOf.get(r.item_key)) nameOf.set(r.item_key, r.name)
+
+  const needle = q ? q.toLowerCase() : null, out = []
+  for (const p of pairs.values()) {
+    const name = nameOf.get(p.item_key), t = tracked.get(key(p.item_key, p.unit)) ?? null
+    if (needle && !p.item_key.includes(needle) && !name.toLowerCase().includes(needle)) continue
+    const e = estimate(p)
+    if (!include_untracked && ['off', 'once', 'lapsed'].includes(e.status)) continue
+    if (status && e.status !== status) continue
+    const cheapest = p.rows.filter((r) => r.unit_price_cents != null && r.merchant && dayNum(today) - dayNum(r.purchased_at) <= 90)
+      .reduce((a, r) => (!a || r.unit_price_cents <= a.unit_price_cents ? r : a), null)   // newest wins a tie
+    out.push({ item_key: p.item_key, unit: p.unit, name, tracked: t == null ? 'auto' : t ? 'on' : 'off', ...e,
+      last_price_cents: p.rows.findLast((r) => r.unit_price_cents != null)?.unit_price_cents ?? null,
+      cheapest_merchant: cheapest?.merchant ?? null })
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name) || a.unit.localeCompare(b.unit))
+}
+
+// "I ran out." Closes the current cycle early, which is how the estimate gets real data.
+// unit defaults to the one bought most recently; the same (item, unit, day) twice is a no-op.
+function markUsedUp({ item_key, unit = null, at, actor = null }) {
+  if (!/^\d{4}-\d{2}-\d{2}/.test(at || '')) throw new Error('at must be YYYY-MM-DD')
+  const c = conn(), d = at.slice(0, 10)
+  const hit = c.prepare(`SELECT unit FROM receipt_items WHERE item_key=? AND (? IS NULL OR unit=?) AND ${HAS_DAY}
+                          ORDER BY purchased_at DESC, id DESC LIMIT 1`).get(item_key, unit, unit)
+  if (!hit) throw new Error(`no purchases of ${item_key}`)
+  const n = c.prepare(`INSERT INTO item_events (item_key, unit, kind, at, actor)
+                       SELECT ?, ?, 'used_up', ?, ?
+                        WHERE NOT EXISTS (SELECT 1 FROM item_events WHERE item_key=? AND unit=? AND at=?)`)
+    .run(item_key, hit.unit, d, actor, item_key, hit.unit, d).changes
+  if (n) audit('mark_used_up', actor, { item_key, unit: hit.unit, at: d }, 1)
+  return { item_key, unit: hit.unit, at: d }
+}
+
+// Override the 2+ purchase days rule for one item. tracked: true/1 on, false/0 off, null back to auto.
+function setItemTracking({ item_key, unit, tracked, actor = null }) {
+  const t = tracked == null ? null : tracked ? 1 : 0, c = conn()
+  if (t == null) c.prepare('DELETE FROM item_settings WHERE item_key=? AND unit=?').run(item_key, unit)
+  else c.prepare(`INSERT INTO item_settings (item_key, unit, tracked) VALUES (?,?,?)
+                  ON CONFLICT(item_key, unit) DO UPDATE SET tracked=excluded.tracked`).run(item_key, unit, t)
+  audit('set_item_tracking', actor, { item_key, unit, tracked: t }, 1)
+  return { item_key, unit, tracked: t }
+}
+
 // Replace a receipt's line items (and optionally tax) after reading its photo. Keeps the JSON
 // column authoritative and re-derives receipt_items from it.
 function setReceiptItems(id, line_items, { tax_cents = undefined } = {}) {
@@ -689,6 +802,7 @@ module.exports = {
   recordBalance, listBalances, setBudget, listBudgets,
   addReceipt, matchReceiptToTransaction, setBillStatus, receiptsAwaitingBill, applyBill,
   parseReceiptLine, syncReceiptItems, setReceiptItems, priceItems, priceHistory,
+  inventory, markUsedUp, setItemTracking,
   audit, listAudit, stats,
 }
 
