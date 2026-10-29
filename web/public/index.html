@@ -1287,7 +1287,7 @@ footer .mono{color:var(--on-dark-soft);opacity:.7}
       <div id="shList"></div>
       <div class="acct-meta sh-foot" id="shFoot"></div>
       <form class="sh-add sh-key" id="shKey" hidden>
-        <input id="shKeyIn" type="password" placeholder="Claude API key (sk-ant-…)" aria-label="Claude API key" autocomplete="off" spellcheck="false" required>
+        <input id="shKeyIn" type="password" placeholder="Claude API key (sk-ant-…)" aria-label="Claude API key" autocomplete="new-password" data-1p-ignore data-lpignore="true" spellcheck="false" required>
         <button class="btn sec sm" type="submit">Save key</button>
       </form>
       <div class="acct-meta sh-key" id="shKeySet" hidden>Claude key saved. <button class="linkbtn" id="shKeyRm" type="button">Remove</button></div>
@@ -2888,7 +2888,7 @@ $('#shKey').onsubmit = async (e) => {
   if (!key) return
   try {
     await post('/shopping/key', { key })
-    $('#shKeyIn').value = ''; toast('Key saved. Claude updates the list within a minute.')
+    $('#shKeyIn').value = ''; toast('Key saved. Claude updates the list in a minute or two.')
     loadShopping()
   } catch (err) { toast(err.message) }
 }

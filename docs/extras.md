@@ -54,11 +54,12 @@ The rules, key or no key, suggest every tracked item that is used up, running lo
 gone, or 2 days left) or about 3 days from running out, with the reason on each row.
 
 To let Claude work on the list, open **Shopping List** in the web app, paste your key into the box at the
-bottom and press **Save key**. Claude takes over within a minute. The page never shows the key again, only
+bottom and press **Save key**. Claude takes over in a minute or two. The page never shows the key again, only
 "Claude key saved" and a **Remove** button.
 
 The key is stored owner-only (`0600` on Linux and macOS) in `.data/anthropic-key.txt`, which is never
-committed. You can also write that file yourself, one line. To keep it elsewhere, set
+committed. You can also write that file yourself, one line (then `chmod 600` it on Linux or macOS, and tap
+**Update now**). To keep it elsewhere, set
 `LEDGER_ANTHROPIC_KEY_FILE` to the file's path in the web service's own environment (`ledger-web`; the MCP
 server and the iPhone API never read it). The file is read at the start of every run, so a new key needs no
 restart.
@@ -70,7 +71,7 @@ API account (separate from a Claude subscription).
 **When it runs.** Only the web app (`ledger-web`) calls Claude. The MCP server, the iPhone API and the web
 app's own screens just ask for a run. The web app checks once a minute, and runs when:
 
-- you tap **Update now**, or an assistant calls `refresh_shopping_list`;
+- you tap **Update now** or save a key, or an assistant calls `refresh_shopping_list`;
 - a receipt line or a Used up tap has changed since the last run (the first check counts, as there is no last
   run yet), at most once every 15 minutes after the last run, so a batch of receipts is one run; or
 - the server's clock has passed 06:00 and it has not run since then.
@@ -94,7 +95,7 @@ rules. Claude adds at most 40 items per run; the rules have no cap.
 at 105 seconds), a refusal, an API error or an unreadable answer all still leave you that list. The line
 under the list shows the status ("no API key: rules only", "Claude timed out: rules only", "Updated by Claude
 2 h ago"). A failed run is not retried by itself; it waits for something new, **Update now**, or the next
-06:00. If you add a key after a run with no key, tap **Update now**.
+06:00. Saving a key on the page starts a run; after writing the key file by hand, tap **Update now**.
 
 `LEDGER_SHOPPING_TIMER=off` (in the web app's environment) turns the timer off. Nothing then calls Claude or
 refreshes the rule suggestions, and **Update now** just stays queued; items you add, tick off, dismiss or

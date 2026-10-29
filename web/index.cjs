@@ -463,10 +463,12 @@ async function api(req, res, url) {
   // The Claude key for the Shopping List. Write-only: the page only ever learns whether one is set.
   if (GET && p === '/shopping/key') return json(res, 200, { set: readKey() != null })
   if (POST && p === '/shopping/key') {
-    const { key } = await readJson(req)
+    const { key } = (await readJson(req)) || {}
     if (key !== null && typeof key !== 'string') return json(res, 400, { ok: false, error: 'key must be a string, or null to remove it' })
     let set
-    try { set = saveKey(key) } catch (e) { return json(res, 400, { ok: false, error: e.message }) }
+    try { set = saveKey(key) } catch (e) {
+      return json(res, 400, { ok: false, error: /look like/.test(e.message) ? e.message : 'could not save the key file' })
+    }
     db.audit('set_anthropic_key', actor, { set }, 1)
     if (set) db.requestShoppingRefresh()   // Claude takes over on the next tick
     return json(res, 200, { ok: true, set })

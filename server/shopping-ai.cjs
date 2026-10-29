@@ -22,12 +22,15 @@ function readKey(file = process.env.LEDGER_ANTHROPIC_KEY_FILE || DEFAULT_KEY_FIL
 // The owner pastes the key in the web app: written owner-only to the file readKey reads, never echoed back.
 // null removes it. Returns whether a key is now set.
 function saveKey(key, file = process.env.LEDGER_ANTHROPIC_KEY_FILE || DEFAULT_KEY_FILE) {
-  if (key == null) { fs.rmSync(file, { force: true }); return false }
-  const k = String(key).trim()
+  const tmp = `${file}.tmp`
+  fs.rmSync(tmp, { force: true })   // a stale or planted .tmp would keep its own mode, or follow a symlink
+  if (key === null) { fs.rmSync(file, { force: true }); return false }
+  const k = typeof key === 'string' ? key.trim() : ''
   if (!/^sk-ant-[\w-]{20,300}$/.test(k)) throw new Error('that does not look like an Anthropic API key (sk-ant-…)')
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(`${file}.tmp`, k + '\n', { mode: 0o600 })
-  fs.renameSync(`${file}.tmp`, file)   // atomic: a half-written key is never read
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  fs.writeFileSync(tmp, k + '\n', { mode: 0o600, flag: 'wx' })
+  try { fs.renameSync(tmp, file) }   // atomic: a half-written key is never read
+  catch (e) { fs.rmSync(tmp, { force: true }); throw e }
   return true
 }
 
