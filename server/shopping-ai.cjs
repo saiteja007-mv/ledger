@@ -19,6 +19,18 @@ function readKey(file = process.env.LEDGER_ANTHROPIC_KEY_FILE || DEFAULT_KEY_FIL
   try { return fs.readFileSync(file, 'utf8').trim() || null } catch { return null }
 }
 
+// The owner pastes the key in the web app: written owner-only to the file readKey reads, never echoed back.
+// null removes it. Returns whether a key is now set.
+function saveKey(key, file = process.env.LEDGER_ANTHROPIC_KEY_FILE || DEFAULT_KEY_FILE) {
+  if (key == null) { fs.rmSync(file, { force: true }); return false }
+  const k = String(key).trim()
+  if (!/^sk-ant-[\w-]{20,300}$/.test(k)) throw new Error('that does not look like an Anthropic API key (sk-ant-…)')
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(`${file}.tmp`, k + '\n', { mode: 0o600 })
+  fs.renameSync(`${file}.tmp`, file)   // atomic: a half-written key is never read
+  return true
+}
+
 const localDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
 const SYSTEM = `You keep a household's weekly-groceries shopping list up to date.
@@ -127,4 +139,4 @@ function startShoppingTimer({ db, everyMs = 60000, dailyAt = '06:00', client = n
   return { stop: () => clearInterval(id) }
 }
 
-module.exports = { CALL_MS, readKey, buildRequest, runShoppingAI, shoppingRunDue, shoppingTick, startShoppingTimer }
+module.exports = { CALL_MS, readKey, saveKey, buildRequest, runShoppingAI, shoppingRunDue, shoppingTick, startShoppingTimer }

@@ -359,7 +359,8 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='ht
 .inv-row .track{height:6px;margin-top:var(--s-xs)}
 .inv-right{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:var(--s-xs);min-width:88px;padding-left:var(--s-xs)}
 /* .sec above is a section margin; as .btn.sec's second class it also gives the button a 32px bottom margin */
-.inv-right .btn,#shRefresh{margin:0}
+.inv-right .btn,#shRefresh,#shKey .btn{margin:0}
+.sh-key{margin-top:var(--s-sm)}
 .inv-off-head{display:flex;justify-content:space-between;width:100%;margin-top:var(--s-sm);padding:4px 0 6px;
   background:none;border:0;font:inherit;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;
   letter-spacing:.04em;cursor:pointer;text-align:left}
@@ -1285,6 +1286,11 @@ footer .mono{color:var(--on-dark-soft);opacity:.7}
       </form>
       <div id="shList"></div>
       <div class="acct-meta sh-foot" id="shFoot"></div>
+      <form class="sh-add sh-key" id="shKey" hidden>
+        <input id="shKeyIn" type="password" placeholder="Claude API key (sk-ant-…)" aria-label="Claude API key" autocomplete="off" spellcheck="false" required>
+        <button class="btn sec sm" type="submit">Save key</button>
+      </form>
+      <div class="acct-meta sh-key" id="shKeySet" hidden>Claude key saved. <button class="linkbtn" id="shKeyRm" type="button">Remove</button></div>
     </section>
 
   </main>
@@ -2824,6 +2830,7 @@ async function loadShopping(poll = 0) {
   clearTimeout(shTimer)
   const sh = await api('/shopping')
   renderShopping(sh)
+  if (!poll) api('/shopping/key').then(({ set }) => { $('#shKey').hidden = set; $('#shKeySet').hidden = !set }).catch(() => {})
   // A queued run finishes within a couple of minutes; look again every few seconds, then stop asking.
   if (sh.ai.pending && poll < 45) shTimer = setTimeout(() => {
     if ($('#v-shopping').classList.contains('on')) loadShopping(poll + 1).catch(() => {})
@@ -2875,6 +2882,20 @@ $('#shList').addEventListener('click', async (e) => {
   try { await post('/shopping', { [b.dataset.act]: [Number(b.dataset.id)] }); loadShopping() }
   catch (err) { toast(err.message); b.disabled = false }
 })
+$('#shKey').onsubmit = async (e) => {
+  e.preventDefault()
+  const key = $('#shKeyIn').value.trim()
+  if (!key) return
+  try {
+    await post('/shopping/key', { key })
+    $('#shKeyIn').value = ''; toast('Key saved. Claude updates the list within a minute.')
+    loadShopping()
+  } catch (err) { toast(err.message) }
+}
+$('#shKeyRm').onclick = async () => {
+  if (!confirm('Remove the Claude key? The list goes back to rules only.')) return
+  try { await post('/shopping/key', { key: null }); loadShopping() } catch (err) { toast(err.message) }
+}
 $('#shRefresh').onclick = async () => {
   try {
     await post('/shopping/refresh', {})

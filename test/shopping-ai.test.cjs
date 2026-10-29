@@ -34,6 +34,17 @@ test('key file is trimmed, blank is none', () => {
   assert.equal(ai.readKey(path.join(tmp, 'nope.txt')), null)
   assert.equal(ai.readKey(tmp), null, 'unreadable (a directory) is none, not a throw')
 })
+test('a pasted key is saved for readKey, junk is refused, null removes it', () => {
+  const f = path.join(tmp, 'new', 'pasted.txt'), good = 'sk-ant-api03-' + 'x'.repeat(40)
+  assert.equal(ai.saveKey(`  ${good}\n`, f), true)
+  assert.equal(ai.readKey(f), good)
+  if (process.platform !== 'win32') assert.equal(fs.statSync(f).mode & 0o777, 0o600)
+  for (const bad of ['', 'hello', 'sk-ant-short', `${good} extra`, 'sk-ant-' + 'x'.repeat(400)])
+    assert.throws(() => ai.saveKey(bad, f), /does not look like an Anthropic API key/)
+  assert.equal(ai.readKey(f), good, 'a refused paste leaves the saved key alone')
+  assert.equal(ai.saveKey(null, f), false); assert.equal(ai.readKey(f), null)
+  assert.equal(ai.saveKey(null, f), false, 'removing twice is fine')
+})
 test('request shape and privacy', async () => {
   db.upsertAccount({ name: 'Visa 1234', kind: 'credit' })
   const seen = {}; const r = await ai.runShoppingAI({ db, today: T, keyFile,

@@ -53,13 +53,15 @@ How Inventory learns:
 The rules, key or no key, suggest every tracked item that is used up, running low (about 80% of the last pack
 gone, or 2 days left) or about 3 days from running out, with the reason on each row.
 
-To let Claude work on the list:
+To let Claude work on the list, open **Shopping List** in the web app, paste your key into the box at the
+bottom and press **Save key**. Claude takes over within a minute. The page never shows the key again, only
+"Claude key saved" and a **Remove** button.
 
-1. Put your key on one line in `.data/anthropic-key.txt`. That default path works with the normal install
-   and `.data/` is never committed. To keep it elsewhere, set `LEDGER_ANTHROPIC_KEY_FILE` to the file's path
-   in the web service's own environment (`ledger-web`; the MCP server and the iPhone API never read it).
-2. Keep that file owner-only. On Linux or macOS: `chmod 600 .data/anthropic-key.txt`.
-3. Tap **Update now**. The file is read at the start of every run, so a new key needs no restart.
+The key is stored owner-only (`0600` on Linux and macOS) in `.data/anthropic-key.txt`, which is never
+committed. You can also write that file yourself, one line. To keep it elsewhere, set
+`LEDGER_ANTHROPIC_KEY_FILE` to the file's path in the web service's own environment (`ledger-web`; the MCP
+server and the iPhone API never read it). The file is read at the start of every run, so a new key needs no
+restart.
 
 Claude adds what you will probably need soon, changes quantities and removes what is no longer needed, each
 with a short reason. It uses `claude-opus-5-5` at low effort, one request per run, billed to your Anthropic

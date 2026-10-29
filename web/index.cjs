@@ -19,7 +19,7 @@ const categorize = require('../server/categorize.cjs')
 const reconcile = require('../server/reconcile.cjs')
 const bill = require('../server/bill.cjs')
 const fx = require('../server/fx.cjs')
-const { startShoppingTimer } = require('../server/shopping-ai.cjs')
+const { startShoppingTimer, readKey, saveKey } = require('../server/shopping-ai.cjs')
 
 const PORT = Number(process.env.FINANCE_WEB_PORT || 42832)
 const HOST = process.env.FINANCE_WEB_HOST || '127.0.0.1'
@@ -460,6 +460,17 @@ async function api(req, res, url) {
   }
   if (GET && p === '/shopping') return json(res, 200, db.shoppingList({ today: today() }))
   if (POST && p === '/shopping/refresh') return json(res, 200, { ok: true, ...db.requestShoppingRefresh() })
+  // The Claude key for the Shopping List. Write-only: the page only ever learns whether one is set.
+  if (GET && p === '/shopping/key') return json(res, 200, { set: readKey() != null })
+  if (POST && p === '/shopping/key') {
+    const { key } = await readJson(req)
+    if (key !== null && typeof key !== 'string') return json(res, 400, { ok: false, error: 'key must be a string, or null to remove it' })
+    let set
+    try { set = saveKey(key) } catch (e) { return json(res, 400, { ok: false, error: e.message }) }
+    db.audit('set_anthropic_key', actor, { set }, 1)
+    if (set) db.requestShoppingRefresh()   // Claude takes over on the next tick
+    return json(res, 200, { ok: true, set })
+  }
   if (POST && p === '/shopping') {
     const { add, bought, dismiss, remove } = await readJson(req)
     return json(res, 200, { ok: true, ...db.updateShoppingList({ add, bought, dismiss, remove, actor, today: today() }) })
