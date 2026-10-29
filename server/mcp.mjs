@@ -290,6 +290,20 @@ export function buildServer(d) {
     async ({ item_key, unit }) => db.priceHistory(item_key, { unit })
       .map((h) => ({ ...h, unit_price: money(h.unit_price_cents), total: money(h.total_cents) })))
 
+  T('inventory', 'What is in the house, estimated from receipts: one row per item + unit with `status` (learning | in_stock | running_low | used_up | lapsed | off | once), last bought, `qty_left`, `used_pct`, `days_left`, and the last price. Quantities are in the item `unit` (each | lb | oz | gal …). Only items bought on 2+ days are tracked automatically; `include_untracked: true` also returns lapsed, off and once-only items. Filter with `q` (substring) or `status`.',
+    { q: z.string().optional(),
+      status: z.enum(['learning', 'in_stock', 'running_low', 'used_up', 'lapsed', 'off', 'once']).optional(),
+      include_untracked: z.boolean().optional() },
+    async ({ q, status, include_untracked }) => db.inventory({ q, status, include_untracked, today: today() })
+      .map((i) => ({ ...i, last_price: money(i.last_price_cents) })))
+
+  T('shopping_list', 'The open shopping list: items with qty, why they are on it (`source`: user | ai | rule, plus `reason`), the last price paid and the cheapest recent merchant, and the estimated `total`. `ai` says when Claude last refreshed the list and whether a refresh is pending.',
+    {},
+    async () => {
+      const l = db.shoppingList({ today: today() })
+      return { ...l, total: money(l.total_cents), items: l.items.map((i) => ({ ...i, last_price: money(i.last_price_cents) })) }
+    })
+
   W('set_receipt_items', 'Replace the line items on a stored receipt — use after reading its photo with get_receipt_image (receipts uploaded from the web app have a photo but no items until someone reads it). Write weighed produce as "Red onion — 3.53 lb @ $0.59/lb" and pack sizes as "Rice 20 lb" / "Yogurt 48 oz" so a per-unit price is derived; qty is the number of packs.',
     { id: z.number().int(),
       line_items: z.array(z.object({ name: z.string(), qty: z.number().optional(), price: z.number().optional() })),
@@ -299,6 +313,25 @@ export function buildServer(d) {
       if (n == null) throw new Error(`no receipt ${id}`)
       return { id, items: n }
     })
+
+  W('mark_used_up', 'Say an item ran out ("Used up") — the routine input that teaches the household estimate how fast it goes through that item. `item_key` comes from inventory; `unit` narrows it when the item was bought in two units; `date` is YYYY-MM-DD, default today.',
+    { item_key: z.string(), unit: z.string().optional(), date: z.string().optional() },
+    async ({ item_key, unit, date }) => db.markUsedUp({ item_key, unit, at: date || today(), actor: 'mcp' }))
+
+  W('set_item_tracking', 'Override whether an item is tracked in inventory. `tracked: true` always tracks it, `false` hides it, `null` goes back to automatic (tracked once bought on 2+ days). `item_key` and `unit` come from inventory.',
+    { item_key: z.string(), unit: z.string(), tracked: z.boolean().nullable() },
+    async ({ item_key, unit, tracked }) => db.setItemTracking({ item_key, unit, tracked, actor: 'mcp' }))
+
+  W('update_shopping_list', 'Change the shopping list; ids come from shopping_list. `add` puts items on it as the owner\'s own (`qty` optional); `bought` ticks items off as bought today (counts as a restock); `dismiss` closes Claude/rule suggestions and `remove` closes the owner\'s own items. Each id list only affects rows it fits, so a mismatch is skipped, not an error.',
+    { add: z.array(z.object({ name: z.string(), qty: z.number().optional() })).max(100).optional(),
+      bought: z.array(z.number().int()).max(200).optional(),
+      dismiss: z.array(z.number().int()).max(200).optional(),
+      remove: z.array(z.number().int()).max(200).optional() },
+    async ({ add, bought, dismiss, remove }) => db.updateShoppingList({ add, bought, dismiss, remove, actor: 'mcp', today: today() }))
+
+  W('refresh_shopping_list', 'Ask for Claude to review the shopping list. This only queues the request: the server runs it within a minute, so call shopping_list afterwards and check `ai.pending` and `ai.last_run_at`.',
+    {},
+    async () => db.requestShoppingRefresh())
 
   W('set_category', 'Set the category (and optionally subcategory) on one transaction.',
     { id: z.number().int(), category: z.string(), subcategory: z.string().optional() },
