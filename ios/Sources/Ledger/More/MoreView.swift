@@ -29,7 +29,7 @@ struct MoreView: View {
                         link(.inventory, icon: .housing, title: "Inventory",
                              subtitle: String(localized: "What's left at home, estimated from receipts"))
                         link(.shoppingList, icon: .checkmark, title: "Shopping List",
-                             subtitle: String(localized: "What to buy next, kept up to date by Claude"))
+                             subtitle: String(localized: "What to buy next, kept from your inventory"))
                         link(.audit, icon: .repeatPayment, title: "Audit Log",
                              subtitle: String(localized: "The latest writes, from any client"))
 

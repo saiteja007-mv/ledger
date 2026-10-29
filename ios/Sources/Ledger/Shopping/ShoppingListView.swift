@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// What to buy: rows the rules and Claude suggest from the inventory, plus your own. Add an item at the top,
-/// tick one when you've bought it, swipe to dismiss a suggestion or remove your own. Claude keeps the list
-/// up to date on the server; "Update now" asks for a pass right away.
+/// tick one when you've bought it, swipe to dismiss a suggestion or remove your own. The rules (and Claude,
+/// when the server has a key) keep the list up to date on the server; "Update now" asks for a pass right away.
 struct ShoppingListView: View {
     @Environment(LedgerStore.self) private var store
     @State private var shopping: Loadable<ShoppingList> = .loading
