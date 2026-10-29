@@ -668,14 +668,19 @@ const localDay = () => { const n = new Date(); return `${n.getFullYear()}-${Stri
 // every estimate into NaN, so such a line is simply not a purchase.
 const HAS_DAY = "purchased_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'"
 
+// The one definition of "a purchase": dated, product-only receipt lines, oldest first.
+// inventory() and markUsedUp() both read through it so they always agree on what exists.
+const purchaseLines = (c, item_key = null) => c.prepare(
+  `SELECT item_key, unit, name, qty, unit_price_cents, total_cents, merchant, purchased_at
+     FROM receipt_items WHERE ${HAS_DAY} AND (? IS NULL OR item_key=?) ORDER BY purchased_at, id`)
+  .all(item_key, item_key).filter((r) => isProductLine(r.name, r.total_cents))
+
 // Household items with what is left of each, rebuilt from receipt lines on every call.
 // ponytail: reads every dated receipt line; fine for one household, add a cache if a year of receipts feels slow.
 function inventory({ q = null, status = null, include_untracked = false, today = localDay() } = {}) {
   const c = conn(), key = (k, u) => `${k}\0${u}`
   const pairs = new Map(), used = new Map()
-  for (const r of c.prepare(`SELECT item_key, unit, name, qty, unit_price_cents, total_cents, merchant, purchased_at
-                               FROM receipt_items WHERE ${HAS_DAY} ORDER BY purchased_at, id`).all()) {
-    if (!isProductLine(r.name, r.total_cents)) continue
+  for (const r of purchaseLines(c)) {
     const k = key(r.item_key, r.unit)
     if (!pairs.has(k)) pairs.set(k, { item_key: r.item_key, unit: r.unit, rows: [], ticks: [] })
     pairs.get(k).rows.push(r)
@@ -725,8 +730,7 @@ function inventory({ q = null, status = null, include_untracked = false, today =
 function markUsedUp({ item_key, unit = null, at, actor = null }) {
   if (!/^\d{4}-\d{2}-\d{2}/.test(at || '')) throw new Error('at must be YYYY-MM-DD')
   const c = conn(), d = at.slice(0, 10)
-  const hit = c.prepare(`SELECT unit FROM receipt_items WHERE item_key=? AND (? IS NULL OR unit=?) AND ${HAS_DAY}
-                          ORDER BY purchased_at DESC, id DESC LIMIT 1`).get(item_key, unit, unit)
+  const hit = purchaseLines(c, item_key).findLast((r) => !unit || r.unit === unit)
   if (!hit) throw new Error(`no purchases of ${item_key}`)
   const n = c.prepare(`INSERT INTO item_events (item_key, unit, kind, at, actor)
                        SELECT ?, ?, 'used_up', ?, ?

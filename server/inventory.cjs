@@ -8,8 +8,10 @@ const LAPSE_FACTOR = 3         // no rebuy for 3x the expected life ...
 const LAPSE_MIN_DAYS = 30      // ... and at least this long -> probably stopped buying it
 const CYCLES = 6               // typical life = median of the last 6 completed cycles
 
-// Lines that are not products. Everything else on a receipt may be a consumable.
-const NOT_A_PRODUCT = /\b(tax|fee|deposit|bag|tip|service charge|coupon|discount)\b/i
+// Lines that are not products. Everything else on a receipt may be a consumable. "bag" and "tip"
+// alone are too common in real product names ("Rice 5 lb bag", "Q-tip swabs"), so only the
+// carrier-bag charge and a tip/gratuity line at the start count.
+const NOT_A_PRODUCT = /\b(tax|fee|deposit|service charge|coupon|discount|bag fee|carry-?out bag|shopping bag|plastic bag|paper bag)\b|^tips?\b|gratuity/i
 const isProductLine = (name, total_cents) => total_cents > 0 && !NOT_A_PRODUCT.test(name || '')
 
 // Whole days since 1970 for a local 'YYYY-MM-DD…' string. Date.UTC (never new Date(s)) so

@@ -48,6 +48,9 @@ test('non-product lines never count', () => {
   assert.equal(inv.isProductLine('Coupon', -100), false)
   assert.equal(inv.isProductLine('Bag fee', 10), false)
   assert.equal(inv.isProductLine('Milk 1 gal', 349), true)
+  assert.equal(inv.isProductLine('Tip', 300), false)
+  assert.equal(inv.isProductLine('Rice 5 lb bag', 899), true)
+  assert.equal(inv.isProductLine('Q-tip cotton swabs', 299), true)
 })
 test('inventory from receipts, mark_used_up and tracking', () => {
   for (const d of ['2026-10-01', '2026-10-07']) db.addReceipt({ merchant: 'Corner Market', purchased_at: `${d}T10:00:00`, total_cents: 349, line_items: [{ name: 'Test oat milk 1 gal', price: 3.49 }, { name: 'Sales tax', price: 0.2 }] })
@@ -89,4 +92,10 @@ test('Used up and tracking writes are audited once', () => {
   const tools = db.listAudit(100).map((a) => a.tool)
   assert.equal(tools.filter((t) => t === 'mark_used_up').length, 1)   // the repeat was a no-op
   assert.equal(tools.filter((t) => t === 'set_item_tracking').length, 1)
+})
+test('Used up only sees product lines, never tax, fee or credit lines', () => {
+  db.addReceipt({ merchant: 'Corner Market', purchased_at: '2026-10-20T10:00:00', total_cents: 120, line_items: [{ name: 'Sales tax', price: 0.2 }, { name: 'Test refund credit', price: -1 }] })
+  assert.throws(() => db.markUsedUp({ item_key: 'sale tax', at: '2026-10-21' }), /no purchases of sale tax/)
+  assert.throws(() => db.markUsedUp({ item_key: 'test refund credit', at: '2026-10-21' }), /no purchases of test refund credit/)
+  assert.equal(raw.prepare("SELECT COUNT(*) n FROM item_events WHERE item_key IN ('sale tax','test refund credit')").get().n, 0)
 })
