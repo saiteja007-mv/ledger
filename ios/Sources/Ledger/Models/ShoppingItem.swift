@@ -31,6 +31,12 @@ struct ShoppingItem: Decodable, Identifiable, Hashable, Sendable {
     /// The owner's words stay as typed; names from receipts are lower case.
     var displayName: String { isOwner ? name : name.capitalized }
 
+    /// Why it is on the list; the owner's own rows say so when they carry no reason.
+    var reasonText: String? {
+        if let reason, !reason.isEmpty { return reason }
+        return isOwner ? String(localized: "Added by you") : nil
+    }
+
     /// "1 gal" or "×12".
     var qtyText: String? {
         qty.map { Quantity.text($0, unit: unit) }

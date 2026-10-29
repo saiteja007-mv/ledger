@@ -366,6 +366,13 @@ check(inventory[3].daysLeftText == nil && inventory[4].daysLeftText == nil, "no 
 check(milk.lastsText == "lasts ~12 days" && inventory[4].lastsText == nil, "lasts text")
 check(milk.usedFraction == 0.83 && inventory[3].usedFraction == 1 && inventory[4].usedFraction == 0, "usage bar fraction")
 
+check(milk.subtitle == "0.2 gal left" && inventory[3].subtitle == "Used up", "tracked row subtitle: \(milk.subtitle)")
+check(inventory[4].subtitle.hasPrefix("Learning · bought ") && inventory[6].subtitle.hasPrefix("Single purchase · bought "),
+      "untracked row subtitle: \(inventory[4].subtitle) / \(inventory[6].subtitle)")
+check(inventory[5].subtitle.hasPrefix("Not tracked · ") && inventory[7].subtitle.hasPrefix("Not tracked · "), "off and unknown rows")
+check(milk.hasEstimate && inventory[3].hasEstimate && !inventory[4].hasEstimate && !inventory[5].hasEstimate, "the bar needs an estimate")
+check(milk.canMarkUsedUp && inventory[4].canMarkUsedUp && !inventory[3].canMarkUsedUp && !inventory[5].canMarkUsedUp, "Used up is offered while in use")
+
 // Sections, in the order the screen shows them; running low leads with what runs out first.
 let groups = InventorySection.groups(inventory)
 check(groups.map(\.section) == [.runningLow, .inStock, .usedUp, .learning, .notTracked], "section order: \(groups.map(\.section))")
@@ -399,6 +406,8 @@ check(shopping.items.count == 4 && shopping.totalCents == 853, "shopping list de
 check(shopping.ai.pending == false && shopping.ai.ok == true && shopping.ai.lastRunAt == "2026-10-29T14:03:07.123Z", "ai status decode")
 check(shopping.items[0].source == .rule && shopping.items[1].source == .ai && shopping.items[2].source == .user, "sources")
 check(shopping.items[3].source == .unknown, "an unknown source decodes as unknown")
+check(shopping.items[0].reasonText == "Running low: about 2 days left" && shopping.items[3].reasonText == nil, "reason text")
+check(shopping.items[2].reasonText == "Added by you", "the owner's own row says who added it")
 check(shopping.items[2].isOwner && !shopping.items[0].isOwner, "only the owner's own rows are removed; the rest are dismissed")
 check(shopping.items[0].qtyText == "1 gal" && shopping.items[1].qtyText == "×12" && shopping.items[2].qtyText == nil, "shopping qty text")
 // The currency symbol depends on the locale ("US$" in this Linux run), so check what follows it.

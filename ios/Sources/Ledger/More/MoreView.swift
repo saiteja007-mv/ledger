@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Account, in the place of the kit's "My account": the pale header with the swirl and a round badge, then
-/// grouped rows for what the tab bar has no room for: Accounts, Review, Receipts, Budgets, Item Prices
-/// and the Audit Log, a line on Face ID, and the font credit.
+/// grouped rows for what the tab bar has no room for: Accounts, Review, Receipts, Budgets, Item Prices,
+/// Inventory, the Shopping List and the Audit Log, a line on Face ID, and the font credit.
 struct MoreView: View {
     @Environment(LedgerStore.self) private var store
     @Environment(Navigator.self) private var navigator
@@ -26,6 +26,10 @@ struct MoreView: View {
                              subtitle: String(localized: "Monthly limits by category"))
                         link(.prices, icon: .foodGroceries, title: "Item Prices",
                              subtitle: String(localized: "What you paid for an item over time"))
+                        link(.inventory, icon: .housing, title: "Inventory",
+                             subtitle: String(localized: "What's left at home, estimated from receipts"))
+                        link(.shoppingList, icon: .checkmark, title: "Shopping List",
+                             subtitle: String(localized: "What to buy next, kept up to date by Claude"))
                         link(.audit, icon: .repeatPayment, title: "Audit Log",
                              subtitle: String(localized: "The latest writes, from any client"))
 

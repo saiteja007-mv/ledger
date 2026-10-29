@@ -59,6 +59,12 @@ struct InventoryItem: Decodable, Identifiable, Hashable, Sendable {
     /// Followed now, so the owner can stop. A lapsed item comes back by itself when it is bought again.
     var canStopTracking: Bool { section != .notTracked }
 
+    /// An estimate exists, so the usage bar means something.
+    var hasEstimate: Bool { status == .inStock || status == .runningLow || status == .usedUp }
+
+    /// Followed and in use, so "Used up" means something (on a learning item it closes the first cycle).
+    var canMarkUsedUp: Bool { status == .inStock || status == .runningLow || status == .learning }
+
     /// "0.2 gal left", "9 left" or "Used up"; nil while the app is still learning the item.
     var leftText: String? {
         switch status {
@@ -95,14 +101,21 @@ struct InventoryItem: Decodable, Identifiable, Hashable, Sendable {
     var statusLabel: String? {
         switch status {
         case .learning: String(localized: "Learning")
-        case .once: String(localized: "Bought once")
+        case .once: String(localized: "Single purchase")
         case .lapsed: String(localized: "Lapsed")
         case .off, .unknown: String(localized: "Not tracked")
         case .inStock, .runningLow, .usedUp: nil
         }
     }
 
-    /// "Bought Oct 20, 2026 · 1 gal".
+    /// The row's second line: how much is left, or why there is no estimate ("Learning · bought Oct 20, 2026").
+    var subtitle: String {
+        if let leftText { return leftText }
+        let when = lastBought.map { String(localized: "bought \(LedgerDate.display($0))") }
+        return [statusLabel, when].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// "Bought Oct 20, 2026 · ×1".
     var boughtText: String? {
         guard let lastBought else { return nil }
         let when = String(localized: "Bought \(LedgerDate.display(lastBought))")
