@@ -6,6 +6,9 @@ enum Route: Hashable {
     case budgets
     case prices
     case priceHistory(PriceItem)
+    case inventory
+    case inventoryItem(InventoryItem)
+    case shoppingList
     case audit
     /// A category's expenses over one month (what a budget or a chart slice adds up).
     case category(CategoryScope)

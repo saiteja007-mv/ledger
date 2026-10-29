@@ -19,6 +19,7 @@ const categorize = require('../server/categorize.cjs')
 const reconcile = require('../server/reconcile.cjs')
 const bill = require('../server/bill.cjs')
 const fx = require('../server/fx.cjs')
+const { startShoppingTimer, readKey, saveKey } = require('../server/shopping-ai.cjs')
 
 const PORT = Number(process.env.FINANCE_WEB_PORT || 42832)
 const HOST = process.env.FINANCE_WEB_HOST || '127.0.0.1'
@@ -435,6 +436,48 @@ async function api(req, res, url) {
     return json(res, 200, { item_key, history: db.priceHistory(item_key, { unit: q.get('unit') || null }) })
   }
 
+  // Inventory and Shopping List. "Update now" only sets the refresh marker: the timer started below is
+  // the one place that calls Claude, so no route here ever waits on it.
+  if (GET && p === '/inventory') {
+    const untracked = q.get('include_untracked')
+    return json(res, 200, db.inventory({ q: q.get('q') || null, include_untracked: untracked === '1' || untracked === 'true', today: today() }))
+  }
+  if (POST && p === '/inventory/used-up') {
+    const b = await readJson(req)
+    if (typeof b.item_key !== 'string' || !b.item_key) return json(res, 400, { ok: false, error: 'item_key required' })
+    try {
+      return json(res, 200, { ok: true, ...db.markUsedUp({ item_key: b.item_key, unit: b.unit || null, at: today(), actor }) })
+    } catch (e) {
+      if (/^no purchases of /.test(e.message)) return json(res, 400, { ok: false, error: e.message })
+      throw e
+    }
+  }
+  if (POST && p === '/inventory/tracking') {
+    const b = await readJson(req)
+    if (typeof b.item_key !== 'string' || !b.item_key || typeof b.unit !== 'string' || !b.unit) return json(res, 400, { ok: false, error: 'item_key and unit required' })
+    if (b.tracked !== null && typeof b.tracked !== 'boolean') return json(res, 400, { ok: false, error: 'tracked must be true, false or null' })
+    return json(res, 200, { ok: true, ...db.setItemTracking({ item_key: b.item_key, unit: b.unit, tracked: b.tracked, actor }) })
+  }
+  if (GET && p === '/shopping') return json(res, 200, db.shoppingList({ today: today() }))
+  if (POST && p === '/shopping/refresh') return json(res, 200, { ok: true, ...db.requestShoppingRefresh() })
+  // The Claude key for the Shopping List. Write-only: the page only ever learns whether one is set.
+  if (GET && p === '/shopping/key') return json(res, 200, { set: readKey() != null })
+  if (POST && p === '/shopping/key') {
+    const { key } = (await readJson(req)) || {}
+    if (key !== null && typeof key !== 'string') return json(res, 400, { ok: false, error: 'key must be a string, or null to remove it' })
+    let set
+    try { set = saveKey(key) } catch (e) {
+      return json(res, 400, { ok: false, error: /look like/.test(e.message) ? e.message : 'could not save the key file' })
+    }
+    db.audit('set_anthropic_key', actor, { set }, 1)
+    if (set) db.requestShoppingRefresh()   // Claude takes over on the next tick
+    return json(res, 200, { ok: true, set })
+  }
+  if (POST && p === '/shopping') {
+    const { add, bought, dismiss, remove } = await readJson(req)
+    return json(res, 200, { ok: true, ...db.updateShoppingList({ add, bought, dismiss, remove, actor, today: today() }) })
+  }
+
   // Raw-bytes upload. No multipart parser: the browser can POST a File directly as the
   // body, which makes this a Buffer write instead of a dependency and a state machine.
   if (POST && p === '/upload') {
@@ -607,4 +650,6 @@ server.listen(PORT, HOST, () => {
   console.log(`[finance-web] listening on http://${HOST}:${PORT}`)
   console.log(`[finance-web] ${s.transactions} transactions · ${s.accounts} accounts · ${s.receipts} receipts`)
   for (const id of db.receiptsAwaitingBill()) queueBill(id)   // reads interrupted by a restart
+  // The only process that ever calls Claude; everyone else just sets the refresh marker in the DB.
+  if (process.env.LEDGER_SHOPPING_TIMER !== 'off') startShoppingTimer({ db })
 })

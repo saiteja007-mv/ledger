@@ -70,7 +70,34 @@ test('every MCP tool is exposed, plus the app extras', async () => {
     'category_breakdown', 'budget_status', 'list_balances', 'reconcile_account', 'review_queue', 'suggest_categories',
     'list_audit', 'list_receipts', 'get_receipt', 'get_receipt_image', 'upsert_transactions', 'record_balance',
     'add_receipt', 'item_prices', 'item_price_history', 'set_receipt_items', 'set_category', 'mark_reviewed',
-    'void_transaction', 'set_budget', 'categories', 'networth', 'upload_receipt_photo', 'merchant_logo']) assert.ok(names.has(n), n)
+    'void_transaction', 'set_budget', 'categories', 'networth', 'upload_receipt_photo', 'merchant_logo',
+    'inventory', 'mark_used_up', 'set_item_tracking', 'shopping_list', 'update_shopping_list', 'refresh_shopping_list']) assert.ok(names.has(n), n)
+})
+
+test('inventory and shopping list tools work over the API', async () => {
+  const ago = (n) => { const d = new Date(now.getTime() - n * 864e5); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}` }
+  for (const n of [10, 3]) await ok('add_receipt', { merchant: 'Corner Market', purchased_at: `${ago(n)}T10:00:00`, total: 3.49,
+    line_items: [{ name: 'Test dish soap 1 gal', price: 3.49 }] })
+
+  const inv = await ok('inventory', {})
+  const soap = inv.find((i) => i.name.toLowerCase().includes('test dish soap'))
+  assert.ok(soap, JSON.stringify(inv))
+  assert.equal(soap.last_price, 3.49)
+  assert.equal(soap.last_price_cents, 349)
+
+  const used = await ok('mark_used_up', { item_key: soap.item_key })
+  assert.equal(used.at, day)
+  assert.equal(used.item_key, soap.item_key)
+  assert.equal((await ok('set_item_tracking', { item_key: soap.item_key, unit: soap.unit, tracked: false })).tracked, 0)
+  assert.equal((await ok('set_item_tracking', { item_key: soap.item_key, unit: soap.unit, tracked: null })).tracked, null)
+
+  await ok('update_shopping_list', { add: [{ name: 'Test soap', qty: 2 }] })
+  const list = await ok('shopping_list', {})
+  assert.ok(list.items.some((i) => i.name === 'Test soap' && i.qty === 2), JSON.stringify(list))
+  assert.equal(typeof list.total, 'number')
+  assert.equal(typeof list.total_cents, 'number')
+
+  assert.deepEqual(await ok('refresh_shopping_list', {}), { queued: true })
 })
 
 test('merchant descriptors resolve to a brand domain, and people and noise to nothing', () => {

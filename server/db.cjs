@@ -11,6 +11,8 @@ const path = require('node:path')
 const fs = require('node:fs')
 const crypto = require('node:crypto')
 const { toStoredLine } = require('./bill.cjs')
+const { isProductLine, estimateItem, dayNum } = require('./inventory.cjs')
+const { ruleSuggestions, clip, cleanQty, NAME_MAX, REASON_MAX, MAX_AI_ADDS } = require('./shopping.cjs')
 
 let db = null
 let dbFile = null
@@ -134,6 +136,34 @@ function initDb(file = process.env.FINANCE_DB || DEFAULT_DB) {
       UNIQUE (receipt_id, line_no)
     );
     CREATE INDEX IF NOT EXISTS receipt_items_key ON receipt_items(item_key, purchased_at);
+
+    -- Inventory + shopping list (see inventory.cjs). Both are keyed on receipt_items' (item_key, unit).
+    CREATE TABLE IF NOT EXISTS item_settings (
+      item_key TEXT NOT NULL, unit TEXT NOT NULL,
+      tracked  INTEGER,                         -- NULL = auto (2+ purchase days), 1 = on, 0 = off
+      PRIMARY KEY (item_key, unit)
+    );
+    CREATE TABLE IF NOT EXISTS item_events (
+      id INTEGER PRIMARY KEY, item_key TEXT NOT NULL, unit TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind = 'used_up'),
+      at   TEXT NOT NULL, actor TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    -- close_event_id / close_receipt_id: the newest item_events / receipts id when the row was
+    -- closed, so "new information since" never depends on clocks. restock_date: set only when the
+    -- owner ticks a row bought with no receipt; inventory() counts it as a rebuy on that day.
+    CREATE TABLE IF NOT EXISTS shopping_list (
+      id INTEGER PRIMARY KEY, item_key TEXT, unit TEXT, name TEXT NOT NULL, qty REAL,
+      source TEXT NOT NULL CHECK (source IN ('rule','ai','user')),
+      reason TEXT,
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','bought','dismissed','removed')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT, closed_at TEXT,
+      close_event_id INTEGER, close_receipt_id INTEGER, restock_date TEXT
+    );
+    CREATE TABLE IF NOT EXISTS shopping_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1), requested_at TEXT, running_since TEXT, last_run_at TEXT,
+      last_ok INTEGER, last_message TEXT, last_marker TEXT
+    );
+    INSERT OR IGNORE INTO shopping_state (id) VALUES (1);   -- the single state row always exists
 
     CREATE TABLE IF NOT EXISTS audit_log (
       id         INTEGER PRIMARY KEY,
@@ -569,6 +599,8 @@ function syncReceiptItems(receiptId) {
   const del = c.prepare('DELETE FROM receipt_items WHERE receipt_id=?')
   const ins = c.prepare(`INSERT INTO receipt_items (receipt_id, line_no, name, item_key, qty, unit,
                           unit_price_cents, total_cents, merchant, purchased_at) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+  // keys this receipt already had: add_receipt re-reads old receipts, and those are not new purchases
+  const had = new Set(c.prepare('SELECT item_key FROM receipt_items WHERE receipt_id=?').all(receiptId).map((x) => x.item_key))
   del.run(receiptId)
   let n = 0
   items.forEach((line, i) => {
@@ -578,6 +610,7 @@ function syncReceiptItems(receiptId) {
             r.merchant ?? null, r.purchased_at ?? null)
     n++
   })
+  closeBoughtFromReceipt(receiptId, had)
   return n
 }
 
@@ -631,6 +664,268 @@ function priceHistory(item_key, { unit = null } = {}) {
       FROM receipt_items ri LEFT JOIN receipts r ON r.id = ri.receipt_id
      WHERE ri.item_key=?${extra}
   ORDER BY ri.purchased_at ASC, ri.id ASC`).all(...args)
+}
+
+// ── inventory ─────────────────────────────────────────────────────────────────
+
+const localDay = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}` }
+// purchased_at is free text from the extractor. One that does not start YYYY-MM-DD would turn
+// every estimate into NaN, so such a line is simply not a purchase.
+const HAS_DAY = "purchased_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'"
+
+// The one definition of "a purchase": dated, product-only receipt lines, oldest first.
+// inventory() and markUsedUp() both read through it so they always agree on what exists.
+const purchaseLines = (c, item_key = null) => c.prepare(
+  `SELECT item_key, unit, name, qty, unit_price_cents, total_cents, merchant, purchased_at
+     FROM receipt_items WHERE ${HAS_DAY} AND (? IS NULL OR item_key=?) ORDER BY purchased_at, id`)
+  .all(item_key, item_key).filter((r) => isProductLine(r.name, r.total_cents))
+
+// Household items with what is left of each, rebuilt from receipt lines on every call.
+// ponytail: reads every dated receipt line; fine for one household, add a cache if a year of receipts feels slow.
+function inventory({ q = null, status = null, include_untracked = false, today = localDay() } = {}) {
+  const c = conn(), key = (k, u) => `${k}\0${u}`
+  const untracked = ['off', 'once', 'lapsed'], all = include_untracked || untracked.includes(status)   // asking for one implies them
+  const pairs = new Map(), used = new Map()
+  for (const r of purchaseLines(c)) {
+    const k = key(r.item_key, r.unit)
+    if (!pairs.has(k)) pairs.set(k, { item_key: r.item_key, unit: r.unit, rows: [], ticks: [] })
+    pairs.get(k).rows.push(r)
+  }
+  for (const e of c.prepare("SELECT item_key, unit, at FROM item_events WHERE kind='used_up'").all()) {
+    const k = key(e.item_key, e.unit)
+    used.set(k, [...(used.get(k) || []), e.at])
+  }
+  const tracked = new Map(c.prepare('SELECT item_key, unit, tracked FROM item_settings').all().map((s) => [key(s.item_key, s.unit), s.tracked]))
+  const estimate = (p) => estimateItem({
+    purchases: [...p.rows.map((r) => ({ date: r.purchased_at, qty: r.qty })), ...p.ticks],
+    usedUp: used.get(key(p.item_key, p.unit)) || [], tracked: tracked.get(key(p.item_key, p.unit)) ?? null, today })
+
+  // Ticked bought on the shopping list with no receipt: a rebuy of the last quantity on that day,
+  // for the unit bought most recently, unless a receipt for the item already covers the day.
+  const day = (r) => r.purchased_at.slice(0, 10)
+  for (const t of c.prepare(`SELECT item_key, restock_date FROM shopping_list
+                              WHERE status='bought' AND restock_date IS NOT NULL AND item_key IS NOT NULL ORDER BY id`).all()) {
+    const mine = [...pairs.values()].filter((p) => p.item_key === t.item_key)
+    if (!mine.length || mine.some((p) => p.rows.some((r) => day(r) === t.restock_date.slice(0, 10)))) continue
+    const p = mine.reduce((a, b) => (day(b.rows.at(-1)) >= day(a.rows.at(-1)) ? b : a))
+    p.ticks.push({ date: t.restock_date, qty: estimate(p).last_qty })
+  }
+
+  // one display name per item_key, even when it was bought in two units: the alphabetically first printed name
+  const nameOf = new Map()
+  for (const p of pairs.values()) for (const r of p.rows) if (!nameOf.has(r.item_key) || r.name < nameOf.get(r.item_key)) nameOf.set(r.item_key, r.name)
+
+  const needle = q ? q.toLowerCase() : null, out = []
+  for (const p of pairs.values()) {
+    const name = nameOf.get(p.item_key), t = tracked.get(key(p.item_key, p.unit)) ?? null
+    if (needle && !p.item_key.includes(needle) && !name.toLowerCase().includes(needle)) continue
+    const e = estimate(p)
+    if (!all && untracked.includes(e.status)) continue
+    if (status && e.status !== status) continue
+    const cheapest = p.rows.filter((r) => r.unit_price_cents != null && r.merchant && dayNum(today) - dayNum(r.purchased_at) <= 90)
+      .reduce((a, r) => (!a || r.unit_price_cents <= a.unit_price_cents ? r : a), null)   // newest wins a tie
+    out.push({ item_key: p.item_key, unit: p.unit, name, tracked: t == null ? 'auto' : t ? 'on' : 'off', ...e,
+      last_price_cents: p.rows.findLast((r) => r.unit_price_cents != null)?.unit_price_cents ?? null,
+      cheapest_merchant: cheapest?.merchant ?? null })
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name) || a.unit.localeCompare(b.unit))
+}
+
+// "I ran out." Closes the current cycle early, which is how the estimate gets real data.
+// unit defaults to the one bought most recently; the same (item, unit, day) twice is a no-op.
+// There is no undo, so a typo'd day (2027, or Feb 30) is refused rather than stored.
+function markUsedUp({ item_key, unit = null, at, actor = null, today = localDay() }) {
+  const d = String(at ?? '').slice(0, 10), [y, mo, dd] = d.split('-').map(Number)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || new Date(Date.UTC(y, mo - 1, dd)).toISOString().slice(0, 10) !== d)
+    throw new Error('at must be a real date as YYYY-MM-DD')
+  if (d > String(today).slice(0, 10)) throw new Error(`at ${d} is after today (${String(today).slice(0, 10)})`)
+  const c = conn()
+  const hit = purchaseLines(c, item_key).findLast((r) => !unit || r.unit === unit)
+  if (!hit) throw new Error(`no purchases of ${item_key}`)
+  const n = c.prepare(`INSERT INTO item_events (item_key, unit, kind, at, actor)
+                       SELECT ?, ?, 'used_up', ?, ?
+                        WHERE NOT EXISTS (SELECT 1 FROM item_events WHERE item_key=? AND unit=? AND at=?)`)
+    .run(item_key, hit.unit, d, actor, item_key, hit.unit, d).changes
+  if (n) audit('mark_used_up', actor, { item_key, unit: hit.unit, at: d }, 1)
+  return { item_key, unit: hit.unit, at: d }
+}
+
+// Override the 2+ purchase days rule for one item. tracked: true/1 on, false/0 off, null back to auto.
+function setItemTracking({ item_key, unit, tracked, actor = null }) {
+  const t = tracked == null ? null : tracked ? 1 : 0, c = conn()
+  if (t == null) c.prepare('DELETE FROM item_settings WHERE item_key=? AND unit=?').run(item_key, unit)
+  else c.prepare(`INSERT INTO item_settings (item_key, unit, tracked) VALUES (?,?,?)
+                  ON CONFLICT(item_key, unit) DO UPDATE SET tracked=excluded.tracked`).run(item_key, unit, t)
+  audit('set_item_tracking', actor, { item_key, unit, tracked: t }, 1)
+  return { item_key, unit, tracked: t }
+}
+
+// ── shopping list ─────────────────────────────────────────────────────────────
+
+const RUN_LOCK_MS = 120000   // a run that has not finished by now crashed; its lock is free again
+// Closing a row notes how far receipts and Used up taps had got. "Anything new since?" is then a plain
+// id comparison (isSuppressed) and never depends on clocks (a receipt can be uploaded days after the purchase).
+const CLOSE_STAMP = `closed_at=datetime('now'), updated_at=datetime('now'),
+  close_event_id=(SELECT COALESCE(MAX(id),0) FROM item_events),
+  close_receipt_id=(SELECT COALESCE(MAX(id),0) FROM receipts)`
+const keyOf = (name) => parseReceiptLine({ name }).item_key   // the same normaliser receipt lines go through
+const ids = (a) => (Array.isArray(a) ? a : []).map(Number).filter(Number.isInteger)
+
+// Close open rows by id, optionally only those matching `only` (a source test). Returns how many closed.
+function closeRows(list, status, only = '1', restock = null) {
+  const q = conn().prepare(`UPDATE shopping_list SET status=?, restock_date=?, ${CLOSE_STAMP}
+                             WHERE id=? AND status='open' AND ${only}`)
+  return list.reduce((n, id) => n + q.run(status, restock, id).changes, 0)
+}
+
+// True while something closed the item and nothing has happened to it since: no Used up tap and no
+// receipt line newer than the close. A key has at most one open row, so its newest closed row is the
+// latest close and decides. A bought row was a restock, so it also stops holding the item back once the
+// item reads low again (`low`: running_low or used_up in inventory()); that new information is time passing.
+function isSuppressed(item_key, low = false) {
+  return !!conn().prepare(`SELECT 1 FROM shopping_list s
+     WHERE s.id=(SELECT MAX(id) FROM shopping_list WHERE item_key=? AND status<>'open')
+      AND NOT (s.status='bought' AND ?)
+      AND NOT EXISTS (SELECT 1 FROM item_events e WHERE e.item_key=s.item_key AND e.id > s.close_event_id)
+      AND NOT EXISTS (SELECT 1 FROM receipt_items r WHERE r.item_key=s.item_key AND r.receipt_id > s.close_receipt_id)`)
+    .get(item_key, low ? 1 : 0)
+}
+// Keys with a unit that reads low: the bought rows that no longer hold them back.
+const lowKeys = (inv) => new Set(inv.filter((i) => i.status === 'running_low' || i.status === 'used_up').map((i) => i.item_key))
+
+// The open list, each row with the price hint of the matching inventory item, and the AI run status.
+function shoppingList({ today = localDay() } = {}) {
+  const inv = inventory({ today, include_untracked: true })
+  const items = conn().prepare("SELECT id, item_key, unit, name, qty, source, reason FROM shopping_list WHERE status='open' ORDER BY id")
+    .all().map((r) => {
+      // same unit when the row has one, else any unit bought under that key
+      const hit = inv.find((i) => i.item_key === r.item_key && i.unit === r.unit) || inv.find((i) => i.item_key === r.item_key)
+      return { ...r, last_price_cents: hit?.last_price_cents ?? null, cheapest_merchant: hit?.cheapest_merchant ?? null }
+    })
+  const total_cents = items.reduce((t, r) => t + (r.last_price_cents == null ? 0 : Math.round((r.qty ?? 1) * r.last_price_cents)), 0)
+  const s = shoppingState()
+  return { items, total_cents, ai: { last_run_at: s.last_run_at, ok: s.last_ok == null ? null : !!s.last_ok, message: s.last_message,
+    pending: !!s.requested_at || (!!s.running_since && Date.now() - Date.parse(s.running_since) < RUN_LOCK_MS) } }
+}
+
+// Put every tracked item that is used up or about to run out on the list, unless it is already there
+// or was closed with nothing new since.
+function refreshShoppingRules({ today = localDay() } = {}) {
+  const c = conn(), open = new Set(c.prepare("SELECT item_key FROM shopping_list WHERE status='open'").all().map((r) => r.item_key))
+  const ins = c.prepare("INSERT INTO shopping_list (item_key, unit, name, qty, source, reason) VALUES (?,?,?,?,'rule',?)")
+  let added = 0
+  const inv = inventory({ today }), low = lowKeys(inv)
+  for (const s of ruleSuggestions(inv)) {
+    if (open.has(s.item_key) || isSuppressed(s.item_key, low.has(s.item_key))) continue
+    ins.run(s.item_key, s.unit, s.name, s.qty, s.reason); open.add(s.item_key); added++
+  }
+  if (added) audit('refresh_shopping_rules', null, { today }, added)
+  return { added }
+}
+
+// The owner's edits. bought = ticked at the shop; dismiss = decline a suggestion; remove = delete their own item.
+// A typed name merges into an open row for the same item (their row wins) instead of listing it twice.
+function updateShoppingList({ add = [], bought = [], dismiss = [], remove = [], actor = null, today = localDay() } = {}) {
+  const c = conn(); let added = 0, changed = 0
+  for (const a of Array.isArray(add) ? add : []) {
+    const name = clip(a?.name, NAME_MAX); if (!name) continue
+    const key = keyOf(name), qty = cleanQty(a.qty)
+    const row = c.prepare("SELECT id FROM shopping_list WHERE item_key=? AND status='open' ORDER BY id LIMIT 1").get(key)
+    if (row) {
+      c.prepare("UPDATE shopping_list SET source='user', name=?, qty=COALESCE(?, qty), updated_at=datetime('now') WHERE id=?").run(name, qty, row.id)
+      changed++
+    } else {
+      c.prepare("INSERT INTO shopping_list (item_key, unit, name, qty, source) VALUES (?,NULL,?,?,'user')").run(key, name, qty)
+      added++
+    }
+  }
+  // a tick with no receipt is a restock today: inventory() counts it as a rebuy of the last quantity
+  changed += closeRows(ids(bought), 'bought', '1', String(today).slice(0, 10))
+  changed += closeRows(ids(dismiss), 'dismissed', "source<>'user'")
+  changed += closeRows(ids(remove), 'removed', "source='user'")
+  audit('update_shopping_list', actor, { add, bought, dismiss, remove }, added + changed)
+  return { added, changed }
+}
+
+// A receipt that has an open item's key bought it. Only keys the receipt did not already have count (`had`):
+// add_receipt re-reads old receipts, and one of those must not tick off something added to the list since.
+function closeBoughtFromReceipt(receiptId, had = new Set()) {
+  const keys = conn().prepare('SELECT item_key, name, total_cents FROM receipt_items WHERE receipt_id=?').all(receiptId)
+    .filter((r) => !had.has(r.item_key) && isProductLine(r.name, r.total_cents)).map((r) => r.item_key)
+  if (!keys.length) return 0
+  const n = conn().prepare(`UPDATE shopping_list SET status='bought', ${CLOSE_STAMP}
+                             WHERE status='open' AND item_key IN (${keys.map(() => '?').join(',')})`).run(...keys).changes
+  if (n) audit('close_shopping_bought', null, { receiptId }, n)
+  return n
+}
+
+// What the AI proposed, applied with care: its output is untrusted text. It never touches the owner's
+// rows, never re-adds something closed with nothing new since, and bad entries are counted, not written.
+function applyShoppingAI({ add, update, remove } = {}, { actor = 'claude', today = localDay() } = {}) {
+  const c = conn(), list = (x) => (Array.isArray(x) ? x : [])
+  const n = { added: 0, updated: 0, removed: 0, refused: 0 }
+  // open on the list, or closed with nothing new since
+  const low = lowKeys(inventory({ today }))
+  const taken = (k) => c.prepare("SELECT 1 FROM shopping_list WHERE item_key=? AND status='open'").get(k) || isSuppressed(k, low.has(k))
+  const adds = list(add)
+  n.refused += Math.max(0, adds.length - MAX_AI_ADDS)   // the rest of an over-long list
+  for (const a of adds.slice(0, MAX_AI_ADDS)) {
+    const name = clip(a?.name, NAME_MAX), given = typeof a?.item_key === 'string' ? clip(a.item_key.toLowerCase(), NAME_MAX) : ''
+    const byName = name && keyOf(name)
+    // Both keys are checked, so a made-up item_key cannot slip past a name the owner already dismissed or listed.
+    // The model's key is kept only when receipts know it (it links to inventory and auto-closes); else the name's.
+    if (!name || taken(byName) || (given && taken(given))) { n.refused++; continue }
+    const key = given && c.prepare('SELECT 1 FROM receipt_items WHERE item_key=? LIMIT 1').get(given) ? given : byName
+    c.prepare("INSERT INTO shopping_list (item_key, unit, name, qty, source, reason) VALUES (?,?,?,?,'ai',?)")
+      .run(key, clip(a.unit, 20) || null, name, cleanQty(a.qty), clip(a.reason, REASON_MAX) || null)
+    n.added++
+  }
+  for (const u of list(update)) {   // a bad qty or empty reason keeps what is there
+    const id = Number(u?.id)
+    const done = Number.isInteger(id) && c.prepare(`UPDATE shopping_list SET qty=COALESCE(?, qty), reason=COALESCE(?, reason), updated_at=datetime('now')
+                                                     WHERE id=? AND status='open' AND source<>'user'`)
+      .run(cleanQty(u.qty), clip(u.reason, REASON_MAX) || null, id).changes
+    done ? n.updated++ : n.refused++
+  }
+  for (const r of list(remove)) {
+    const id = Number(r?.id)
+    Number.isInteger(id) && closeRows([id], 'removed', "source<>'user'") ? n.removed++ : n.refused++
+  }
+  audit('apply_shopping_ai', actor, { add, update, remove }, n.added + n.updated + n.removed, `${n.refused} refused`)
+  return n
+}
+
+// ── AI run bookkeeping (one row, shared by the web process that calls Claude and everyone who asks) ──
+const shoppingState = () => conn().prepare('SELECT * FROM shopping_state WHERE id=1').get()
+
+// Only sets a flag: the ledger-web timer does the work, so callers never wait on Claude.
+function requestShoppingRefresh() {
+  conn().prepare('UPDATE shopping_state SET requested_at=? WHERE id=1').run(new Date().toISOString())
+  audit('refresh_shopping_list', null, {}, 1)
+  return { queued: true }
+}
+
+// One run at a time. Claiming clears the request, so one arriving mid-run is kept for the next tick.
+// A single UPDATE decides it, which keeps two processes from both winning.
+function claimShoppingRun(now = new Date()) {
+  return conn().prepare(`UPDATE shopping_state SET running_since=?, requested_at=NULL
+                          WHERE id=1 AND (running_since IS NULL OR running_since <= ?)`)
+    .run(now.toISOString(), new Date(now - RUN_LOCK_MS).toISOString()).changes === 1
+}
+
+// marker: shoppingChangeMarker() as read BEFORE the run, so data that changed meanwhile triggers another.
+function finishShoppingRun({ ok, message = null, marker = null, now = new Date() }) {
+  conn().prepare('UPDATE shopping_state SET last_run_at=?, last_ok=?, last_message=?, last_marker=?, running_since=NULL WHERE id=1')
+    .run(now.toISOString(), ok ? 1 : 0, message, marker)
+}
+
+// Changes whenever a receipt line or a Used up tap does. receipt_items is rebuilt by delete+insert on every
+// sync and add_receipt re-reads old receipts, so its row ids are not used: the count, newest receipt and
+// total of its lines only move when the content does, and an identical re-read leaves the marker alone.
+function shoppingChangeMarker() {
+  const a = conn().prepare('SELECT COUNT(*) n, COALESCE(MAX(receipt_id),0) m, COALESCE(SUM(total_cents),0) s FROM receipt_items').get()
+  const b = conn().prepare('SELECT COUNT(*) n, COALESCE(MAX(id),0) m FROM item_events').get()
+  return `${a.n}:${a.m}:${a.s}:${b.m}:${b.n}`
 }
 
 // Replace a receipt's line items (and optionally tax) after reading its photo. Keeps the JSON
@@ -689,6 +984,9 @@ module.exports = {
   recordBalance, listBalances, setBudget, listBudgets,
   addReceipt, matchReceiptToTransaction, setBillStatus, receiptsAwaitingBill, applyBill,
   parseReceiptLine, syncReceiptItems, setReceiptItems, priceItems, priceHistory,
+  inventory, markUsedUp, setItemTracking,
+  shoppingList, refreshShoppingRules, isSuppressed, updateShoppingList, closeBoughtFromReceipt, applyShoppingAI,
+  requestShoppingRefresh, shoppingState, claimShoppingRun, finishShoppingRun, shoppingChangeMarker,
   audit, listAudit, stats,
 }
 

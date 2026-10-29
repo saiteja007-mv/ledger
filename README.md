@@ -2,7 +2,7 @@
 
 Your own personal finance tracker, on your own computer. One SQLite file holds everything, and you use it
 from a web app, an iPhone app with home-screen widgets, or an AI assistant (Claude, ChatGPT) over MCP.
-Single user, no cloud account, no subscription, two npm dependencies.
+Single user, no cloud account, no subscription, three npm dependencies.
 
 ## What it does
 
@@ -13,9 +13,15 @@ Single user, no cloud account, no subscription, two npm dependencies.
 - **Net worth**: balances grouped Banking, Cards, Cash and People, reconciled against balances you record.
 - **Receipts**: photos from the phone or the web app, optionally read into line items, which feed
   **Item Prices**: what you paid for each item over time.
+- **Inventory**: learns from your receipts which items you buy again and how fast you go through them, and
+  shows what is in stock, running low or used up. Tap Used up when you finish one.
+- **Shopping List**: kept for you from Inventory by simple rules, with no setup. Add an Anthropic API key and
+  Claude adds to it on top of the rules, and never touches the items you add yourself
+  ([docs/extras.md](docs/extras.md#shopping-list-ai)).
 - **iPhone app**: home, statistics, log spending (also from Siri, Shortcuts and a widget), receipts, item
-  prices, accounts; widgets for spending, budgets and recent transactions; Face ID lock.
-- **Assistants**: 25 MCP tools so Claude or ChatGPT can read your ledger and log for you.
+  prices, inventory, shopping list, accounts; widgets for spending, budgets and recent transactions; Face ID
+  lock.
+- **Assistants**: 31 MCP tools so Claude or ChatGPT can read your ledger and log for you.
 
 ## What you need
 
@@ -55,8 +61,8 @@ at any point.
 hidden start-up script on Windows. `--mcp` adds the MCP server, `--uninstall` removes it all and keeps your
 data, and a port that's taken can be changed once, e.g. `LEDGER_API_PORT=18098 node scripts/install.cjs`.
 
-Then the iPhone app: [docs/ios.md](docs/ios.md). Extras (assistants over MCP, receipt reading, bank alerts,
-logos, currencies): [docs/extras.md](docs/extras.md).
+Then the iPhone app: [docs/ios.md](docs/ios.md). Extras (assistants over MCP, receipt reading, Shopping List
+AI, bank alerts, logos, currencies): [docs/extras.md](docs/extras.md).
 
 ## Day to day
 
@@ -99,7 +105,7 @@ All three go through the same `server/db.cjs`, so the money rules live in exactl
 ## Auth — separate tokens per door
 
 **MCP:** single bearer token at `.data/api-token.txt` (or `FINANCE_TOKEN` env), granting all
-25 tools. Send as `Authorization: Bearer <token>`. A `?token=` query fallback is also accepted
+31 tools. Send as `Authorization: Bearer <token>`. A `?token=` query fallback is also accepted
 because the Claude/ChatGPT connector dialogs have no header field and a
 single URL is the only way to configure them — it is strictly worse than a header, since URLs
 land in proxy logs, browser history and screenshots. Prefer the header wherever the client
@@ -135,7 +141,7 @@ reinstate the split — the plumbing is a small diff in `mcp.mjs`.
 
 Cal.com design system, single self-contained `web/public/index.html` — no build step, no
 framework, no dependencies. Views: Overview, Transactions, Receipts, Review, Categories,
-Budgets (per category plus an overall monthly limit), Prices, Accounts.
+Budgets (per category plus an overall monthly limit), Prices, Inventory, Shopping List, Accounts.
 
 Everything the MCP tools can do, the UI can do, plus the two things chat is bad at:
 
@@ -164,7 +170,7 @@ Everything the MCP tools can do, the UI can do, plus the two things chat is bad 
   that flag exists precisely because an LLM transcribed the row. Confirming rows one at a
   time in chat is miserable, so the UI gives it checkboxes and a bulk confirm.
 
-## Receipts over MCP — 25 tools
+## Receipts over MCP — 31 tools
 
 Any connected agent can pull receipts, including the photo itself:
 

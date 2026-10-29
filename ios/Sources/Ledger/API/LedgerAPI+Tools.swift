@@ -192,4 +192,49 @@ extension LedgerAPI {
     static func priceHistory(for item: PriceItem) async throws(LedgerError) -> [PricePoint] {
         try await call("item_price_history", ["item_key": .string(item.itemKey), "unit": .string(item.unit)])
     }
+
+    static func priceHistory(for item: InventoryItem) async throws(LedgerError) -> [PricePoint] {
+        try await call("item_price_history", ["item_key": .string(item.itemKey), "unit": .string(item.unit)])
+    }
+
+    // MARK: Inventory and shopping list
+
+    /// Tracked items; `includeUntracked` adds the ones switched off, bought once or lapsed.
+    static func inventory(includeUntracked: Bool) async throws(LedgerError) -> [InventoryItem] {
+        try await call("inventory", ["include_untracked": .bool(includeUntracked)])
+    }
+
+    /// Says an item ran out, which teaches the estimate how fast it goes. The server dates it today.
+    static func markUsedUp(_ item: InventoryItem) async throws(LedgerError) {
+        let _: Ignored = try await call("mark_used_up", ["item_key": .string(item.itemKey), "unit": .string(item.unit)])
+    }
+
+    /// `true` always tracks the item, `false` hides it, nil goes back to automatic (bought on 2+ days).
+    static func setTracking(_ item: InventoryItem, tracked: Bool?) async throws(LedgerError) {
+        let value: JSONValue = tracked.map(JSONValue.bool) ?? .null
+        let _: Ignored = try await call("set_item_tracking", [
+            "item_key": .string(item.itemKey), "unit": .string(item.unit), "tracked": value,
+        ])
+    }
+
+    static func shoppingList() async throws(LedgerError) -> ShoppingList {
+        try await call("shopping_list")
+    }
+
+    /// `bought` ticks rows off, `dismiss` closes rule and Claude rows, `remove` closes the owner's own;
+    /// each list only touches rows it fits. Empty lists are left out.
+    static func updateShopping(
+        add: [NewShoppingItem] = [], bought: [Int] = [], dismiss: [Int] = [], remove: [Int] = []
+    ) async throws(LedgerError) {
+        func ids(_ list: [Int]) -> JSONValue? { list.isEmpty ? nil : .array(list.map(JSONValue.int)) }
+        let _: Ignored = try await call("update_shopping_list", [
+            "add": add.isEmpty ? nil : .array(add.map(\.json)),
+            "bought": ids(bought), "dismiss": ids(dismiss), "remove": ids(remove),
+        ])
+    }
+
+    /// Only queues the request: the server runs Claude within a minute, and `ai.pending` is true until then.
+    static func refreshShopping() async throws(LedgerError) {
+        let _: Ignored = try await call("refresh_shopping_list")
+    }
 }

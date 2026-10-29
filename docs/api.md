@@ -22,7 +22,7 @@ share the namespace. This gives full parity with the MCP server without re-imple
   from `mcp.mjs` and `db.cjs`.
 - A tool added to `mcp.mjs` later appears here after `systemctl --user restart ledger-api`.
 
-REST was the alternative. It would have meant hand-mapping about 25 tools to routes and keeping the
+REST was the alternative. It would have meant hand-mapping 31 tools to routes and keeping the
 two lists in step.
 
 ### Requests and answers
@@ -56,7 +56,8 @@ Also available:
 
 Money arguments are positive. `direction` carries the sign. Dates are `YYYY-MM-DD`; `posted_at` is
 local `YYYY-MM-DDTHH:MM:SS`. Lists come back newest first, except `item_price_history`, which is
-oldest first.
+oldest first, `inventory`, which is sorted by name, and `shopping_list`, which is in the order items were
+added.
 
 | Tool | Arguments (required in bold) | Used by the app for |
 |---|---|---|
@@ -84,7 +85,52 @@ oldest first.
 | `set_receipt_items` | **id**, **line_items**, tax | (unused) |
 | `item_prices` | q, merchant, limit | Item Prices |
 | `item_price_history` | **item_key**, unit | Price history chart |
+| `inventory` | q, status, include_untracked | Inventory |
+| `mark_used_up` | **item_key**, unit, date | Inventory, Used up |
+| `set_item_tracking` | **item_key**, **unit**, **tracked** (true, false or null) | Inventory, Track / Don't track |
+| `shopping_list` | | Shopping List |
+| `update_shopping_list` | add (`[{name, qty}]`), bought, dismiss, remove (lists of ids) | Shopping List |
+| `refresh_shopping_list` | | Shopping List, Update now |
 | `list_audit` | limit | Audit Log |
+
+### Inventory and Shopping List
+
+`inventory` returns one row per item and unit, estimated from the lines on receipts: `item_key`, `unit`,
+`name`, `tracked` (`auto`, `on` or `off`), `status`, `last_bought`, `last_qty`, `qty_left`, `used_pct`,
+`days_left`, `lasts_days`, `days_per_unit`, `cycles`, `last_price` (with `last_price_cents`) and
+`cheapest_merchant`. A field that doesn't apply to the status is `null`. `status` is one of:
+
+| Status | Meaning |
+|---|---|
+| `learning` | tracked, but no finished cycle yet to learn from |
+| `in_stock` | enough left |
+| `running_low` | 80% of the last pack is gone, or 2 days or fewer are left |
+| `used_up` | Used up was tapped since the last purchase |
+| `lapsed` | not rebought for 3 times its usual life (and at least 30 days) |
+| `off` | switched off with `set_item_tracking` |
+| `once` | bought on one day only, so not tracked automatically |
+
+Without `include_untracked`, `lapsed`, `off` and `once` items are left out, unless `status` asks for one
+of them. `q` matches the item key or name; `status` keeps one status.
+
+- `mark_used_up` records "ran out" for the unit bought most recently, or the `unit` you give, on `date`
+  (today by default). The same item, unit and day twice is recorded once. An item with no purchases is a 400
+  (`no purchases of <item_key>`), and so is a `date` that is not a real day or is after today, as there is
+  no undo. Returns `{item_key, unit, at}`.
+- `set_item_tracking` has to be sent a `tracked`: `true` always tracks the item, `false` hides it, and `null`
+  goes back to automatic. Returns `{item_key, unit, tracked}` with `tracked` as `1`, `0` or `null`.
+- `shopping_list` returns `{items, total, total_cents, ai}`. Each item has `id`, `item_key`, `unit`, `name`,
+  `qty`, `source` (`user`, `ai` or `rule`), `reason`, `last_price` and `cheapest_merchant`. `ai` is
+  `{last_run_at, ok, message, pending}`: when Claude last ran, whether that run worked, its status text, and
+  whether a run is queued or going.
+- `update_shopping_list` takes any of `add`, `bought`, `dismiss` and `remove`; the last three are lists of
+  ids from `shopping_list`. `add` puts items on as your own, and a name already open on the list is updated,
+  not listed twice. `bought` ticks items off as bought today, which inventory counts as a restock when no
+  receipt covers the day. `dismiss` closes only rule and Claude suggestions, `remove` only your own items, and
+  an id that doesn't fit is skipped, not an error. Returns `{added, changed}`.
+- `refresh_shopping_list` only queues a run (`{queued: true}`). The web app (`ledger-web`) picks it up within
+  a minute, so call `shopping_list` afterwards and watch `ai.pending`. See
+  [Shopping List AI](extras.md#shopping-list-ai) for what runs and what is sent.
 
 ### The rows behind a category total
 

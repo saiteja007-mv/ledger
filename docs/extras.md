@@ -5,8 +5,8 @@ shows which ones are set up.
 
 ## Assistants over MCP (Claude, ChatGPT)
 
-The MCP server (`server/index.cjs`) gives an assistant the same 25 tools the apps use: read, log, categorise,
-budgets, receipts, item prices.
+The MCP server (`server/index.cjs`) gives an assistant the same 31 tools the apps use: read, log, categorise,
+budgets, receipts, item prices, inventory and the shopping list.
 
 1. `node scripts/install.cjs --mcp` adds the MCP server on `127.0.0.1:42820`. Its bearer token is generated
    on first start in `.data/api-token.txt`; treat it like a password.
@@ -32,6 +32,74 @@ merchant, date, every line item, tax and total. The items feed **Item Prices**.
   needs it.
 
 The photo goes to Anthropic for reading; nothing else does.
+
+## Shopping List AI
+
+**Inventory** and the **Shopping List** work without any of this. With no key, Ledger keeps a rule-based list.
+Add an Anthropic API key and Claude works on the list too: the rules still run first, and Claude adds to
+and adjusts what they put there.
+
+How Inventory learns:
+
+- It is built from the line items on your receipts, so it fills in as receipts are read (see Receipt
+  reading) or logged with items. Tax, fees, deposits, coupons, discounts, bag charges and tips are never items.
+- An item bought on **2 or more different days** is tracked. One bought once is not: rebuying is what makes
+  something a thing you use up. Same-day purchases count as one.
+- Tap **Used up** when you finish one. That tells Ledger how fast you really go through it. A rebuy also ends
+  the cycle, and an item's usual life is the median of its last 6 finished cycles, scaled by pack size.
+- **Track** and **Don't track** override the rule for one item (track something bought once, hide a gift
+  bought twice). Items that are off, bought once or lapsed wait in a collapsed **Not tracked** section.
+
+The rules, key or no key, suggest every tracked item that is used up, running low (about 80% of the last pack
+gone, or 2 days left) or about 3 days from running out, with the reason on each row.
+
+To let Claude work on the list, open **Shopping List** in the web app, paste your key into the box at the
+bottom and press **Save key**. Claude takes over in a minute or two. The page never shows the key again, only
+"Claude key saved" and a **Remove** button.
+
+The key is stored owner-only (`0600` on Linux and macOS) in `.data/anthropic-key.txt`, which is never
+committed. You can also write that file yourself, one line (then `chmod 600` it on Linux or macOS, and tap
+**Update now**). To keep it elsewhere, set
+`LEDGER_ANTHROPIC_KEY_FILE` to the file's path in the web service's own environment (`ledger-web`; the MCP
+server and the iPhone API never read it). The file is read at the start of every run, so a new key needs no
+restart.
+
+Claude adds what you will probably need soon, changes quantities and removes what is no longer needed, each
+with a short reason. It uses `claude-opus-5-5` at low effort, one request per run, billed to your Anthropic
+API account (separate from a Claude subscription).
+
+**When it runs.** Only the web app (`ledger-web`) calls Claude. The MCP server, the iPhone API and the web
+app's own screens just ask for a run. The web app checks once a minute, and runs when:
+
+- you tap **Update now** or save a key, or an assistant calls `refresh_shopping_list`;
+- a receipt line or a Used up tap has changed since the last run (the first check counts, as there is no last
+  run yet), at most once every 15 minutes after the last run, so a batch of receipts is one run; or
+- the server's clock has passed 06:00 and it has not run since then.
+
+A run with no tracked items and nothing on the list does not call Claude at all; the line under the list
+says "nothing to plan yet: rules only".
+
+**What is sent.** Today's date; for each tracked item its name, `item_key` (a normalised copy of the name,
+such as `test milk`), unit, status, last bought date and quantity, quantity left, days left and how long a
+pack lasts; that item's purchases from the last 90 days (name, quantity, unit, unit price, store name,
+date); and the open list (id, `item_key`, name, quantity, reason, who added it). Not sent: account names,
+card digits, transaction notes or receipt photos. The key itself goes only to Anthropic.
+
+**What it may change.** It never changes or removes an item you added yourself; the server refuses it
+even if Claude tries. It does not put back an item you dismissed or removed until something new happens
+for that item, a newer receipt line or a Used up tap. An item you bought (ticked off, or closed by a
+receipt) comes back once it reads running low or used up again. The rule-based suggestions follow the same
+rules. Claude adds at most 40 items per run; the rules have no cap.
+
+**When it fails.** The rule-based list is brought up to date first, so no key, a timeout (a run is cut off
+at 105 seconds), a refusal, an API error or an unreadable answer all still leave you that list. The line
+under the list shows the status ("no API key: rules only", "Claude timed out: rules only", "Updated by Claude
+2 h ago"). A failed run is not retried by itself; it waits for something new, **Update now**, or the next
+06:00. Saving a key on the page starts a run; after writing the key file by hand, tap **Update now**.
+
+`LEDGER_SHOPPING_TIMER=off` (in the web app's environment) turns the timer off. Nothing then calls Claude or
+refreshes the rule suggestions, and **Update now** just stays queued; items you add, tick off, dismiss or
+remove yourself still work.
 
 ## Bank of America alerts
 
