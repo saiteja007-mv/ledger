@@ -852,12 +852,17 @@ function closeBoughtFromReceipt(receiptId, had = new Set()) {
 function applyShoppingAI({ add, update, remove } = {}, { actor = 'claude' } = {}) {
   const c = conn(), list = (x) => (Array.isArray(x) ? x : [])
   const n = { added: 0, updated: 0, removed: 0, refused: 0 }
+  // open on the list, or closed with nothing new since
+  const taken = (k) => c.prepare("SELECT 1 FROM shopping_list WHERE item_key=? AND status='open'").get(k) || isSuppressed(k)
   const adds = list(add)
   n.refused += Math.max(0, adds.length - MAX_AI_ADDS)   // the rest of an over-long list
   for (const a of adds.slice(0, MAX_AI_ADDS)) {
     const name = clip(a?.name, NAME_MAX), given = typeof a?.item_key === 'string' ? clip(a.item_key.toLowerCase(), NAME_MAX) : ''
-    const key = given || (name && keyOf(name))
-    if (!name || c.prepare("SELECT 1 FROM shopping_list WHERE item_key=? AND status='open'").get(key) || isSuppressed(key)) { n.refused++; continue }
+    const byName = name && keyOf(name)
+    // Both keys are checked, so a made-up item_key cannot slip past a name the owner already dismissed or listed.
+    // The model's key is kept only when receipts know it (it links to inventory and auto-closes); else the name's.
+    if (!name || taken(byName) || (given && taken(given))) { n.refused++; continue }
+    const key = given && c.prepare('SELECT 1 FROM receipt_items WHERE item_key=? LIMIT 1').get(given) ? given : byName
     c.prepare("INSERT INTO shopping_list (item_key, unit, name, qty, source, reason) VALUES (?,?,?,?,'ai',?)")
       .run(key, clip(a.unit, 20) || null, name, cleanQty(a.qty), clip(a.reason, REASON_MAX) || null)
     n.added++
@@ -901,12 +906,13 @@ function finishShoppingRun({ ok, message = null, marker = null }) {
     .run(new Date().toISOString(), ok ? 1 : 0, message, marker)
 }
 
-// Changes whenever a receipt line or a Used up tap does. receipt_items is rebuilt by delete+insert,
-// so the count is in it too: a re-read that removes the newest row would not move the max id.
+// Changes whenever a receipt line or a Used up tap does. receipt_items is rebuilt by delete+insert on every
+// sync and add_receipt re-reads old receipts, so its row ids are not used: the count, newest receipt and
+// total of its lines only move when the content does, and an identical re-read leaves the marker alone.
 function shoppingChangeMarker() {
-  const q = (t) => conn().prepare(`SELECT COALESCE(MAX(id),0) m, COUNT(*) n FROM ${t}`).get()
-  const a = q('receipt_items'), b = q('item_events')
-  return `${a.m}:${a.n}:${b.m}:${b.n}`
+  const a = conn().prepare('SELECT COUNT(*) n, COALESCE(MAX(receipt_id),0) m, COALESCE(SUM(total_cents),0) s FROM receipt_items').get()
+  const b = conn().prepare('SELECT COUNT(*) n, COALESCE(MAX(id),0) m FROM item_events').get()
+  return `${a.n}:${a.m}:${a.s}:${b.m}:${b.n}`
 }
 
 // Replace a receipt's line items (and optionally tax) after reading its photo. Keeps the JSON

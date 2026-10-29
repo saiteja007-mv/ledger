@@ -117,3 +117,30 @@ test('one AI run adds at most 40 items', () => {
   const r = db.applyShoppingAI({ add: Array.from({ length: 60 }, (_, i) => ({ item_key: null, name: `Test cap item ${i}`, qty: 1 })) })
   assert.deepEqual([r.added, r.refused], [40, 20])
 })
+
+// ── fix round 1 ───────────────────────────────────────────────────────────────
+test('the change marker ignores identical re-reads and moves for a new receipt or a Used up tap', () => {
+  const m = db.shoppingChangeMarker()
+  buy('2026-10-01', 'Test rice 20 lb', 15.99)                     // the same old receipt, same lines
+  assert.equal(db.shoppingChangeMarker(), m)
+  buy('2026-10-18', 'Test rice 20 lb', 15.99)
+  const m2 = db.shoppingChangeMarker()
+  assert.notEqual(m2, m)
+  db.markUsedUp({ item_key: 'test rice', at: '2026-10-19' })
+  assert.notEqual(db.shoppingChangeMarker(), m2)
+})
+test('a made-up item_key cannot dodge a name the owner closed or listed', () => {
+  // test soap was dismissed and test bread removed earlier, with nothing new for either since
+  const closed = db.applyShoppingAI({ add: [{ item_key: 'test soap bar', name: 'Test soap' }, { item_key: 'test bread loaf', name: 'Test bread' }] })
+  assert.deepEqual([closed.added, closed.refused], [0, 2])
+  db.updateShoppingList({ add: [{ name: 'Test eggs' }] })
+  const listed = db.applyShoppingAI({ add: [{ item_key: 'test egg', name: 'Some other wording' },    // the key is an open row (keys are singular)
+                                            { item_key: 'test eggs dozen', name: 'Test eggs' }] })  // the name is an open row
+  assert.deepEqual([listed.added, listed.refused], [0, 2])
+})
+test('the model key is stored only when receipts know it, else the name decides', () => {
+  const r = db.applyShoppingAI({ add: [{ item_key: 'test flour', name: 'Flour sack' }, { item_key: 'made up', name: 'Another thing' }] })
+  assert.equal(r.added, 2)
+  const keys = open().items.filter((x) => /^(flour sack|another thing)$/i.test(x.name)).map((x) => x.item_key)
+  assert.deepEqual(keys, ['test flour', 'another thing'])
+})
