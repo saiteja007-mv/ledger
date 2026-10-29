@@ -20,7 +20,8 @@ struct ShoppingList: Decodable, Sendable {
         let message: String?
         let pending: Bool
 
-        /// The line under the list: "Updating…", "Updated by Claude 2 h ago", "Rules only: <why>" or "Rules only".
+        /// The line under the list: "Updating…", "Updated by Claude 2 h ago", the server's own
+        /// message when a run failed ("no API key: rules only"), or "Rules only" when there is none.
         func footer(now: Date = .now) -> String {
             if pending { return String(localized: "Updating…") }
             switch ok {
@@ -29,7 +30,7 @@ struct ShoppingList: Decodable, Sendable {
                 return String(localized: "Updated by Claude \(Self.ago(ranAt, now: now))")
             case false?:
                 guard let message, !message.isEmpty else { return String(localized: "Rules only") }
-                return String(localized: "Rules only: \(message)")
+                return message
             case nil:
                 return String(localized: "Rules only")
             }

@@ -2836,7 +2836,7 @@ function renderShopping({ items, total_cents, ai }) {
     : `<div class="acct-group-head"><span>${plural(items.length, 'item')}</span>${items.some((r) => r.last_price_cents != null) ? `<span>Est. total ${fmt(total_cents)}</span>` : ''}</div>${items.map(shRow).join('')}`
   const status = ai.pending ? 'Updating…'
     : ai.ok === true ? `Updated by Claude ${ago(ai.last_run_at)}`.trim()
-    : ai.ok === false && ai.message ? `Rules only: ${ai.message}` : 'Rules only'
+    : ai.ok === false && ai.message ? ai.message : 'Rules only'
   $('#shFoot').innerHTML = esc(status)
   $('#shRefresh').disabled = !!ai.pending
 }

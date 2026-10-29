@@ -427,9 +427,12 @@ check(shopping.ai.footer(now: ranAt + 30) == "Updated by Claude just now", "just
 func footer(_ json: String) throws -> String {
     try decoder.decode(ShoppingList.AIStatus.self, from: Data(json.utf8)).footer(now: afterRun)
 }
-check(try footer(#"{"last_run_at":null,"ok":null,"message":null,"pending":false}"#) == "Rules only", "no key: rules only")
-check(try footer(#"{"last_run_at":"2026-10-29T14:03:07.123Z","ok":false,"message":"Claude unavailable","pending":false}"#)
-      == "Rules only: Claude unavailable", "a failed run says why")
+check(try footer(#"{"last_run_at":null,"ok":null,"message":null,"pending":false}"#) == "Rules only", "never ran: rules only")
+// A failed run shows the server's message as is: those already end in "rules only", so nothing is added.
+check(try footer(#"{"last_run_at":null,"ok":false,"message":"no API key: rules only","pending":false}"#)
+      == "no API key: rules only", "no key reads exactly the server's message")
+check(try footer(#"{"last_run_at":"2026-10-29T14:03:07.123Z","ok":false,"message":"Claude unavailable (503)","pending":false}"#)
+      == "Claude unavailable (503)", "a failed run says why")
 check(try footer(#"{"last_run_at":"2026-10-29T14:03:07.123Z","ok":false,"message":null,"pending":false}"#) == "Rules only", "a failed run with no message")
 check(try footer(#"{"last_run_at":"2026-10-29T14:03:07.123Z","ok":true,"message":null,"pending":true}"#) == "Updating…", "pending wins")
 check(try footer(#"{"last_run_at":"2026-10-29T14:03:07Z","ok":true,"message":null,"pending":false}"#) == "Updated by Claude 2 h ago", "no fractional seconds")
