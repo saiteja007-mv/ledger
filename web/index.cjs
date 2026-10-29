@@ -19,6 +19,7 @@ const categorize = require('../server/categorize.cjs')
 const reconcile = require('../server/reconcile.cjs')
 const bill = require('../server/bill.cjs')
 const fx = require('../server/fx.cjs')
+const { startShoppingTimer } = require('../server/shopping-ai.cjs')
 
 const PORT = Number(process.env.FINANCE_WEB_PORT || 42832)
 const HOST = process.env.FINANCE_WEB_HOST || '127.0.0.1'
@@ -607,4 +608,6 @@ server.listen(PORT, HOST, () => {
   console.log(`[finance-web] listening on http://${HOST}:${PORT}`)
   console.log(`[finance-web] ${s.transactions} transactions · ${s.accounts} accounts · ${s.receipts} receipts`)
   for (const id of db.receiptsAwaitingBill()) queueBill(id)   // reads interrupted by a restart
+  // The only process that ever calls Claude; everyone else just sets the refresh marker in the DB.
+  if (process.env.LEDGER_SHOPPING_TIMER !== 'off') startShoppingTimer({ db })
 })
