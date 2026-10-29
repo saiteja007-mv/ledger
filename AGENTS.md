@@ -116,6 +116,8 @@ Ask which of these they want; each one is explained in `docs/extras.md`:
 
 - **Assistants** (Claude, ChatGPT) reading and logging through MCP.
 - **Receipt reading**: photos turned into line items and price history. Needs Claude Code on the server.
+- **Shopping List AI**: Claude keeps the shopping list. Simple rules keep it with no setup; this needs an
+  Anthropic API key in a file (never print it).
 - **Bank of America alerts** turned into transactions.
 - **Merchant logos**: already on. **Other currencies**: just set the account's currency.
 

@@ -53,7 +53,8 @@ Categories are free text and receipts can be unattached, so category is not used
 - A per-item **Track / Don't track** override wins over the rule (track something bought once; hide a gift
   bought twice).
 - Lines that are not products never count: total ≤ 0 (discounts, coupons) and names matching a short
-  stop list (tax, fee, deposit, bag, tip, service charge). Purchases with no `purchased_at` are skipped;
+  stop list (tax, fee, deposit, service charge, coupon, discount, a bag fee or carry-out/shopping/plastic/paper
+  bag, gratuity, and a name that starts with the word "tip"; a product like "Rice 5 lb bag" or "Q-tip swabs" still counts). Purchases with no `purchased_at` are skipped;
   same-day purchases of one item merge into one. *(builder's call)*
 - Not-tracked items (switched off, bought once, lapsed) stay visible in a collapsed **Not tracked**
   section so they can be switched on. *(builder's call)*
