@@ -325,4 +325,117 @@ check(ServerConfig.normalized("myserver.tail1234.ts.net:8448")?.absoluteString =
 check(ServerConfig.normalized(" http://192.168.1.5:8098 ")?.port == 8098, "http and a port are kept")
 check(ServerConfig.normalized("") == nil && ServerConfig.normalized(nil) == nil && ServerConfig.normalized("ftp://x") == nil, "not an address")
 
+// MARK: Inventory and shopping list
+
+// The inventory tool answers a bare array; a field that doesn't fit the status is null, and a status the
+// app doesn't know yet decodes as .unknown instead of failing the whole list.
+let inventoryRows = #"""
+[
+ {"item_key":"milk","unit":"gal","name":"whole milk","tracked":"auto","status":"running_low","last_bought":"2026-10-20","last_qty":1,
+  "qty_left":0.2,"used_pct":83,"days_left":2,"lasts_days":12,"days_per_unit":12,"cycles":3,"last_price_cents":349,"last_price":3.49,"cheapest_merchant":"Corner Market"},
+ {"item_key":"bread","unit":"each","name":"sandwich bread","tracked":"auto","status":"running_low","last_bought":"2026-10-24","last_qty":2,
+  "qty_left":1,"used_pct":50,"days_left":1,"lasts_days":6,"days_per_unit":3,"cycles":5,"last_price_cents":289,"last_price":2.89,"cheapest_merchant":null},
+ {"item_key":"eggs","unit":"each","name":"eggs large","tracked":"auto","status":"in_stock","last_bought":"2026-10-25","last_qty":12,
+  "qty_left":9,"used_pct":25,"days_left":9,"lasts_days":14,"days_per_unit":1.17,"cycles":4,"last_price_cents":42,"last_price":0.42,"cheapest_merchant":null},
+ {"item_key":"rice","unit":"lb","name":"jasmine rice","tracked":"auto","status":"used_up","last_bought":"2026-09-30","last_qty":5,
+  "qty_left":0,"used_pct":100,"days_left":0,"lasts_days":30,"days_per_unit":6,"cycles":2,"last_price_cents":199,"last_price":1.99,"cheapest_merchant":"Corner Market"},
+ {"item_key":"tea","unit":"each","name":"green tea","tracked":"auto","status":"learning","last_bought":"2026-10-22","last_qty":1,
+  "qty_left":null,"used_pct":null,"days_left":null,"lasts_days":null,"days_per_unit":null,"cycles":0,"last_price_cents":null,"last_price":null,"cheapest_merchant":null},
+ {"item_key":"lamp","unit":"each","name":"desk lamp","tracked":"off","status":"off","last_bought":"2026-08-02","last_qty":1,
+  "qty_left":null,"used_pct":null,"days_left":null,"lasts_days":null,"days_per_unit":null,"cycles":0,"last_price_cents":null,"last_price":null,"cheapest_merchant":null},
+ {"item_key":"salt","unit":"each","name":"sea salt","tracked":"auto","status":"once","last_bought":"2026-07-14","last_qty":1,
+  "qty_left":null,"used_pct":null,"days_left":null,"lasts_days":null,"days_per_unit":null,"cycles":0,"last_price_cents":null,"last_price":null,"cheapest_merchant":null},
+ {"item_key":"jam","unit":"each","name":"berry jam","tracked":"auto","status":"stale","last_bought":"2026-07-14","last_qty":1,
+  "qty_left":null,"used_pct":null,"days_left":null,"lasts_days":null,"days_per_unit":null,"cycles":0,"last_price_cents":null,"last_price":null,"cheapest_merchant":null}
+]
+"""#
+let inventory = try decoder.decode([InventoryItem].self, from: Data(inventoryRows.utf8))
+let milk = inventory[0]
+check(inventory.count == 8, "inventory rows")
+check(milk.status == .runningLow && milk.daysLeft == 2 && milk.id == "milk|gal", "running low item: \(milk.status) \(milk.id)")
+check(milk.qtyLeft == 0.2 && milk.lastPriceCents == 349 && milk.cheapestMerchant == "Corner Market", "milk numbers and merchant")
+check(inventory[4].status == .learning && inventory[4].qtyLeft == nil && inventory[4].daysLeft == nil, "learning item has nulls")
+check(inventory[7].status == .unknown, "a status the app doesn't know decodes as unknown")
+
+// Row text: quantity with its unit (a counted item has none), days left, how long a purchase lasts.
+check(milk.leftText == "0.2 gal left", "left text: \(milk.leftText ?? "nil")")
+check(inventory[2].leftText == "9 left", "counted left text: \(inventory[2].leftText ?? "nil")")
+check(inventory[3].leftText == "Used up", "used up left text")
+check(milk.daysLeftText == "~2 days left" && inventory[1].daysLeftText == "~1 day left", "days left text")
+check(inventory[3].daysLeftText == nil && inventory[4].daysLeftText == nil, "no days left for used up or learning")
+check(milk.lastsText == "lasts ~12 days" && inventory[4].lastsText == nil, "lasts text")
+check(milk.usedFraction == 0.83 && inventory[3].usedFraction == 1 && inventory[4].usedFraction == 0, "usage bar fraction")
+
+// Sections, in the order the screen shows them; running low leads with what runs out first.
+let groups = InventorySection.groups(inventory)
+check(groups.map(\.section) == [.runningLow, .inStock, .usedUp, .learning, .notTracked], "section order: \(groups.map(\.section))")
+check(groups[0].items.map(\.itemKey) == ["bread", "milk"], "running low sorted by days left")
+check(groups[4].items.map(\.itemKey) == ["lamp", "salt", "jam"], "off, once and unknown sit under Not tracked")
+check(InventorySection.groups(Array(inventory[2...2])).map(\.section) == [.inStock], "empty sections are left out")
+
+// Track / Don't track: off and once-bought items can be switched on, followed items off; lapsed come back by themselves.
+check(inventory[5].canTrack && inventory[6].canTrack && !milk.canTrack, "track is offered for off and once")
+check(milk.canStopTracking && inventory[4].canStopTracking && !inventory[5].canStopTracking, "don't track is offered for followed items")
+
+// Quantities read without noise.
+check(Quantity.text(1.0, unit: "gal") == "1 gal" && Quantity.text(0.25, unit: "lb") == "0.25 lb", "measured quantity")
+check(Quantity.text(3, unit: "each") == "×3" && Quantity.text(2, unit: nil) == "×2", "counted quantity")
+
+let shoppingRows = #"""
+{"items":[
+ {"id":4,"item_key":"milk","unit":"gal","name":"whole milk","qty":1,"source":"rule","reason":"Running low: about 2 days left",
+  "last_price_cents":349,"last_price":3.49,"cheapest_merchant":"Corner Market"},
+ {"id":7,"item_key":"eggs","unit":"each","name":"eggs large","qty":12,"source":"ai","reason":"You go through a dozen a week",
+  "last_price_cents":42,"last_price":0.42,"cheapest_merchant":null},
+ {"id":9,"item_key":null,"unit":null,"name":"Birthday candles","qty":null,"source":"user","reason":null,
+  "last_price_cents":null,"last_price":null,"cheapest_merchant":null},
+ {"id":10,"item_key":null,"unit":null,"name":"Glue","qty":2,"source":"robot","reason":null,
+  "last_price_cents":null,"last_price":null,"cheapest_merchant":null}],
+ "total_cents":853,"total":8.53,
+ "ai":{"last_run_at":"2026-10-29T14:03:07.123Z","ok":true,"message":null,"pending":false}}
+"""#
+let shopping = try decoder.decode(ShoppingList.self, from: Data(shoppingRows.utf8))
+check(shopping.items.count == 4 && shopping.totalCents == 853, "shopping list decode")
+check(shopping.ai.pending == false && shopping.ai.ok == true && shopping.ai.lastRunAt == "2026-10-29T14:03:07.123Z", "ai status decode")
+check(shopping.items[0].source == .rule && shopping.items[1].source == .ai && shopping.items[2].source == .user, "sources")
+check(shopping.items[3].source == .unknown, "an unknown source decodes as unknown")
+check(shopping.items[2].isOwner && !shopping.items[0].isOwner, "only the owner's own rows are removed; the rest are dismissed")
+check(shopping.items[0].qtyText == "1 gal" && shopping.items[1].qtyText == "×12" && shopping.items[2].qtyText == nil, "shopping qty text")
+// The currency symbol depends on the locale ("US$" in this Linux run), so check what follows it.
+check(shopping.items[0].priceHint?.hasSuffix("3.49/gal · cheapest at Corner Market") == true, "price hint: \(shopping.items[0].priceHint ?? "nil")")
+check(shopping.items[1].priceHint?.hasSuffix("0.42/each") == true && shopping.items[1].priceHint?.contains("cheapest") == false,
+      "price hint without a merchant: \(shopping.items[1].priceHint ?? "nil")")
+check(shopping.items[2].priceHint == nil, "no price, no hint")
+check(shopping.items[0].displayName == "Whole Milk" && shopping.items[2].displayName == "Birthday candles", "the owner's names stay as typed")
+check(shopping.estimatedTotalCents == 853, "estimated total")
+check(ShoppingList(items: Array(shopping.items[2...3]), totalCents: 0, ai: shopping.ai).estimatedTotalCents == nil, "nothing priced: no total")
+
+// The footer under the list, from the AI run's status.
+guard let ranAt = try? Date("2026-10-29T14:03:07Z", strategy: .iso8601) else { fatalError("LOGIC CHECK FAILED: parse run time") }
+let afterRun = ranAt + 2 * 3600 + 60
+check(shopping.ai.footer(now: afterRun) == "Updated by Claude 2 h ago", "updated footer: \(shopping.ai.footer(now: afterRun))")
+check(shopping.ai.footer(now: ranAt + 30) == "Updated by Claude just now", "just now")
+func footer(_ json: String) throws -> String {
+    try decoder.decode(ShoppingList.AIStatus.self, from: Data(json.utf8)).footer(now: afterRun)
+}
+check(try footer(#"{"last_run_at":null,"ok":null,"message":null,"pending":false}"#) == "Rules only", "no key: rules only")
+check(try footer(#"{"last_run_at":"2026-10-29T14:03:07.123Z","ok":false,"message":"Claude unavailable","pending":false}"#)
+      == "Rules only: Claude unavailable", "a failed run says why")
+check(try footer(#"{"last_run_at":"2026-10-29T14:03:07.123Z","ok":false,"message":null,"pending":false}"#) == "Rules only", "a failed run with no message")
+check(try footer(#"{"last_run_at":"2026-10-29T14:03:07.123Z","ok":true,"message":null,"pending":true}"#) == "Updating…", "pending wins")
+check(try footer(#"{"last_run_at":"2026-10-29T14:03:07Z","ok":true,"message":null,"pending":false}"#) == "Updated by Claude 2 h ago", "no fractional seconds")
+check(try footer(#"{"last_run_at":"nonsense","ok":true,"message":null,"pending":false}"#) == "Updated by Claude", "an unreadable time is left out")
+
+// What the add field sends: a trimmed name, a quantity only when given; blanks send nothing.
+let newItem = NewShoppingItem(name: "  Paper towels ", qty: 2)
+check(newItem.isValid && NewShoppingItem(name: "   ").isValid == false && NewShoppingItem(name: "Soap", qty: 0).isValid == false, "new item validity")
+let addBody = try JSONSerialization.jsonObject(with: JSONEncoder().encode(JSONValue.fields(["add": .array([newItem.json, NewShoppingItem(name: "Soap").json])]))) as? [String: Any]
+let added = addBody?["add"] as? [[String: Any]]
+check(added?.count == 2 && added?[0]["name"] as? String == "Paper towels" && added?[0]["qty"] as? Double == 2, "add body: name and qty")
+check(added?[1]["name"] as? String == "Soap" && added?[1]["qty"] == nil, "add body: qty left out")
+
+// set_item_tracking needs an explicit null to go back to automatic; a missing key is refused.
+let trackBody = try JSONSerialization.jsonObject(with: JSONEncoder().encode(JSONValue.fields(["tracked": .null, "unit": "gal"]))) as? [String: Any]
+check(trackBody?["tracked"] is NSNull && trackBody?["unit"] as? String == "gal", "null is sent as null")
+
 print("LOGIC OK")

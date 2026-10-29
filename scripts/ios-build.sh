@@ -53,6 +53,8 @@ swiftc -o .build/ledger-logic-check Checks/main.swift Checks/LinuxShim.swift \
   $M/Models/CategoryPeriod.swift $M/Models/CategoryScope.swift $M/Models/CategoryTotal.swift \
   $M/Models/TransactionList.swift $M/Models/TransactionPaging.swift $M/Models/SpendingSummary.swift \
   $M/Models/MerchantLogo.swift $M/Models/TransferRoute.swift $M/Models/CategoryName.swift $M/Models/QuickLog.swift \
+  $M/Models/Quantity.swift $M/Models/InventoryItem.swift $M/Models/InventorySection.swift \
+  $M/Models/ShoppingItem.swift $M/Models/ShoppingList.swift $M/Models/NewShoppingItem.swift \
   Sources/LedgerWidgets/WidgetModels.swift \
   > logic.log 2>&1 || { cat logic.log; echo "LOGIC CHECK DID NOT COMPILE"; exit 1; }
 .build/ledger-logic-check || { echo "LOGIC CHECK FAILED"; exit 1; }

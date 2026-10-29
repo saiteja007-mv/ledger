@@ -5,6 +5,8 @@ enum JSONValue: Encodable, Equatable, Sendable {
     case int(Int)
     case double(Double)
     case bool(Bool)
+    /// An explicit null, for a tool that reads "null" differently from a missing argument.
+    case null
     case array([JSONValue])
     case object([String: JSONValue])
 
@@ -20,6 +22,7 @@ enum JSONValue: Encodable, Equatable, Sendable {
         case .int(let value): try container.encode(value)
         case .double(let value): try container.encode(value)
         case .bool(let value): try container.encode(value)
+        case .null: try container.encodeNil()
         case .array(let value): try container.encode(value)
         case .object(let value): try container.encode(value)
         }
